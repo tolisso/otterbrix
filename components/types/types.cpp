@@ -61,6 +61,10 @@ namespace components::types {
                     extension_ = std::make_unique<function_logical_type_extension>(
                         *static_cast<function_logical_type_extension*>(other.extension_.get()));
                     break;
+                case logical_type_extension::extension_type::JSON:
+                    extension_ = std::make_unique<json_logical_type_extension>(
+                        *static_cast<json_logical_type_extension*>(other.extension_.get()));
+                    break;
                 default:
                     assert(false && "complex_logical_type copy: unimplemented extension type");
             }
@@ -105,6 +109,10 @@ namespace components::types {
                 case logical_type_extension::extension_type::FUNCTION:
                     extension_ = std::make_unique<function_logical_type_extension>(
                         *static_cast<function_logical_type_extension*>(other.extension_.get()));
+                    break;
+                case logical_type_extension::extension_type::JSON:
+                    extension_ = std::make_unique<json_logical_type_extension>(
+                        *static_cast<json_logical_type_extension*>(other.extension_.get()));
                     break;
                 default:
                     assert(false && "complex_logical_type copy: unimplemented extension type");
@@ -260,6 +268,8 @@ namespace components::types {
                 return physical_type::STRUCT;
             case logical_type::LIST:
                 return physical_type::LIST;
+            case logical_type::JSON:
+                return physical_type::INT64; // JSON stores json_id as BIGINT
             default:
                 return physical_type::INVALID;
         }
@@ -373,6 +383,12 @@ namespace components::types {
                                     std::move(alias));
     }
 
+    complex_logical_type complex_logical_type::create_json(std::string auxiliary_table_name, std::string alias) {
+        return complex_logical_type(logical_type::JSON,
+                                    std::make_unique<json_logical_type_extension>(std::move(auxiliary_table_name)),
+                                    std::move(alias));
+    }
+
     logical_type_extension::logical_type_extension(extension_type t, std::string alias)
         : type_(t)
         , alias_(std::move(alias)) {}
@@ -459,5 +475,13 @@ namespace components::types {
         // TODO: check with inheritance
         return lhs.type() == rhs.type() && lhs.alias() == rhs.alias();
     }
+
+    json_logical_type_extension::json_logical_type_extension()
+        : logical_type_extension(extension_type::JSON)
+        , auxiliary_table_name_() {}
+
+    json_logical_type_extension::json_logical_type_extension(std::string auxiliary_table_name)
+        : logical_type_extension(extension_type::JSON)
+        , auxiliary_table_name_(std::move(auxiliary_table_name)) {}
 
 } // namespace components::types

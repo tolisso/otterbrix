@@ -118,6 +118,7 @@ namespace components::types {
         LAMBDA = 106,
         UNION = 107,
         ARRAY = 108,
+        JSON = 109, // JSON type with auxiliary table storage
 
         UNKNOWN = 127, // Unknown type, used for parameter expressions
         INVALID = 255
@@ -401,6 +402,7 @@ namespace components::types {
         static complex_logical_type create_struct(const std::vector<complex_logical_type>& fields,
                                                   std::string alias = "");
         static complex_logical_type create_union(std::vector<complex_logical_type> fields, std::string alias = "");
+        static complex_logical_type create_json(std::string auxiliary_table_name = "", std::string alias = "");
 
     private:
         logical_type type_ = logical_type::NA;
@@ -447,7 +449,8 @@ namespace components::types {
             DECIMAL = 5,
             ENUM = 6,
             USER = 7,
-            FUNCTION = 8
+            FUNCTION = 8,
+            JSON = 9
         };
 
         logical_type_extension() = default;
@@ -568,6 +571,18 @@ namespace components::types {
     private:
         complex_logical_type return_type_;
         std::vector<complex_logical_type> argument_types_;
+    };
+
+    class json_logical_type_extension : public logical_type_extension {
+    public:
+        json_logical_type_extension();
+        explicit json_logical_type_extension(std::string auxiliary_table_name);
+
+        const std::string& auxiliary_table_name() const noexcept { return auxiliary_table_name_; }
+        void set_auxiliary_table_name(const std::string& name) { auxiliary_table_name_ = name; }
+
+    private:
+        std::string auxiliary_table_name_; // Name of the auxiliary table storing JSON data
     };
 
     template<typename T>
