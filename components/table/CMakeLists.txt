@@ -5,6 +5,7 @@ set(SOURCE_${PROJECT_NAME}
         column_data.cpp
         standard_column_data.cpp
         array_column_data.cpp
+        json_column_data.cpp
         list_column_data.cpp
         struct_column_data.cpp
         validity_column_data.cpp

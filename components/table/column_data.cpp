@@ -4,6 +4,7 @@
 
 #include "array_column_data.hpp"
 #include "column_state.hpp"
+#include "json_column_data.hpp"
 #include "list_column_data.hpp"
 #include "row_group.hpp"
 #include "standard_column_data.hpp"
@@ -357,6 +358,13 @@ namespace components::table {
                                                          start_row,
                                                          type,
                                                          parent);
+        } else if (type.type() == types::logical_type::JSON) {
+            return std::make_unique<json_column_data_t>(resource,
+                                                        block_manager,
+                                                        column_index,
+                                                        start_row,
+                                                        type,
+                                                        parent);
         } else if (type.to_physical_type() == types::physical_type::BIT) {
             return std::make_unique<validity_column_data_t>(resource, block_manager, column_index, start_row, *parent);
         }

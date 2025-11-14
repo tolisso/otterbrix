@@ -30,7 +30,8 @@ std::pmr::string gen_id(int num, std::pmr::memory_resource* resource) {
     return res;
 }
 
-document_ptr gen_doc(int num, std::pmr::memory_resource* resource) {
+document_ptr
+gen_doc(int num, std::pmr::memory_resource* resource) {
     document_ptr doc = make_document(resource);
     doc->set("/_id", gen_id(num, resource));
     doc->set("/count", num);
