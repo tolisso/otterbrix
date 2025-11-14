@@ -3,6 +3,8 @@
 #include "validity_column_data.hpp"
 #include <string>
 #include <map>
+#include <unordered_map>
+#include <mutex>
 
 namespace components::table {
 
@@ -96,6 +98,20 @@ namespace components::table {
          */
         std::string read_json(int64_t json_id);
 
+        // Public interface for testing
+        // These methods are exposed for unit testing purposes
+        std::map<std::string, int64_t> parse_simple_json_for_test(const std::string& json_string) {
+            return parse_simple_json(json_string);
+        }
+
+        void insert_into_auxiliary_table_for_test(int64_t json_id, const std::map<std::string, int64_t>& fields) {
+            insert_into_auxiliary_table(json_id, fields);
+        }
+
+        std::map<std::string, int64_t> query_auxiliary_table_for_test(int64_t json_id) {
+            return query_auxiliary_table(json_id);
+        }
+
     private:
         /**
          * @brief Parses simple JSON string into key-value pairs
@@ -135,6 +151,14 @@ namespace components::table {
 
         // Counter for generating unique json_id values
         std::atomic<int64_t> next_json_id_;
+
+        // In-memory storage for auxiliary table data (prototype implementation)
+        // Maps json_id -> (key -> value)
+        // In production, this would be replaced with actual table storage
+        std::unordered_map<int64_t, std::map<std::string, int64_t>> auxiliary_data_;
+
+        // Mutex to protect auxiliary_data_ from concurrent access
+        mutable std::mutex auxiliary_data_mutex_;
     };
 
 } // namespace components::table

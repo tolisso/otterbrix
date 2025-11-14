@@ -1,0 +1,186 @@
+=============================================================================
+ПОЛНЫЙ ОБЗОР: Работа со строками (VARCHAR/String) в Otterbrix
+=============================================================================
+
+СОЗДАНО: 2025-11-14
+ИСТОЧНИКИ: Анализ компонентов Otterbrix
+
+=============================================================================
+ОСНОВНЫЕ ФАЙЛЫ И ИХ РАСПОЛОЖЕНИЕ
+=============================================================================
+
+Типы и логические значения:
+  /home/tolisso/diploma/otterbrix/components/types/logical_value.hpp
+  /home/tolisso/diploma/otterbrix/components/types/logical_value.cpp
+  /home/tolisso/diploma/otterbrix/components/types/physical_value.hpp
+  /home/tolisso/diploma/otterbrix/components/types/physical_value.cpp
+
+Векторы и буферы:
+  /home/tolisso/diploma/otterbrix/components/vector/vector.hpp
+  /home/tolisso/diploma/otterbrix/components/vector/vector.cpp
+  /home/tolisso/diploma/otterbrix/components/vector/vector_buffer.hpp
+  /home/tolisso/diploma/otterbrix/components/vector/vector_buffer.cpp
+
+Arrow и Append:
+  /home/tolisso/diploma/otterbrix/components/vector/arrow/arrow_appender.hpp
+  /home/tolisso/diploma/otterbrix/components/vector/arrow/arrow_appender.cpp
+  /home/tolisso/diploma/otterbrix/components/vector/arrow/appender/string_data.hpp
+  /home/tolisso/diploma/otterbrix/components/vector/arrow/arrow_string_view.hpp
+  /home/tolisso/diploma/otterbrix/components/vector/arrow/scaner/arrow_conversion.cpp
+
+Тесты:
+  /home/tolisso/diploma/otterbrix/components/vector/tests/test_vector.cpp (строки 48-167)
+  /home/tolisso/diploma/otterbrix/components/vector/tests/test_arrow_conversion.cpp (строки 12-118)
+
+=============================================================================
+КЛЮЧЕВЫЕ КОМПОНЕНТЫ
+=============================================================================
+
+1. LOGICAL_VALUE_T (logical_value.hpp)
+   - Логическое представление значения
+   - Конструктор: logical_value_t(std::string value)
+   - Получение: value<std::string*>(), value<std::string_view>()
+   - Хранение: std::unique_ptr<std::string>
+
+2. VECTOR_T (vector.hpp/cpp)
+   - Основной класс вектора данных
+   - Для строк: тип STRING_LITERAL
+   - Методы:
+     * set_value() - вставка значения (vector.cpp:417)
+     * to_unified_format() - преобразование формата (vector.cpp:946)
+     * value() - получение значения
+
+3. UNIFIED_VECTOR_FORMAT (vector.hpp)
+   - Унифицированный формат доступа к данным
+   - Члены:
+     * data - указатель на данные (std::byte*)
+     * referenced_indexing - вектор индексации
+     * validity - маска валидности (NULL флаги)
+   - Для строк: get_data<std::string_view>()
+
+4. STRING_VECTOR_BUFFER_T (vector_buffer.hpp)
+   - Специализированный буфер для строк
+   - Содержит: string_heap для хранения данных
+   - Метод: insert() - вставка строки в heap
+
+5. ARROW_STRING_DATA_T (appender/string_data.hpp)
+   - Обработчик для append операций со строками
+   - Методы:
+     * initialize() - инициализация буферов
+     * append_templated() - добавление строк (строки 20-62)
+     * finalize() - финализация Arrow структуры
+   - Использует offset и auxiliary buffers
+
+=============================================================================
+ПОТОК ДАННЫХ
+=============================================================================
+
+std::string
+    ↓ (создается logical_value_t)
+logical_value_t (STRING_LITERAL, unique_ptr<std::string>)
+    ↓ (вставляется в вектор через set_value)
+vector_t (FLAT, типа STRING_LITERAL)
+    ├─ data: std::string_view[]
+    ├─ auxiliary: string_vector_buffer_t
+    │   └─ string_heap (реальные данные)
+    └─ validity: validity_mask_t
+    
+    ↓ (преобразуется в unified формат)
+unified_vector_format
+    ├─ data: std::byte* (переведено в std::string_view*)
+    ├─ referenced_indexing: indexing_vector_t*
+    └─ validity: validity_mask_t
+    
+    ↓ (используется для append/экспорта)
+ArrowArray (Arrow C Data Interface)
+    ├─ buffers[1]: offset array (int64_t[])
+    └─ buffers[2]: string data (char[])
+
+=============================================================================
+КЛЮЧЕВЫЕ ОПЕРАЦИИ
+=============================================================================
+
+ОПЕРАЦИЯ 1: Создание и вставка строки
+────────────────────────────────────────
+1. Создать logical_value_t из std::string:
+   logical_value_t val{std::string("hello")};
+
+2. Вставить в вектор:
+   vector_t v(..., STRING_LITERAL, ...);
+   v.set_value(index, val);
+
+3. Внутренний процесс (vector.cpp:476-488):
+   - Проверяется тип (STRING_LITERAL)
+   - Создается auxiliary (string_vector_buffer_t) если не существует
+   - Строка вставляется в string_heap через insert()
+   - Сохраняется std::string_view в основном буфере
+
+ОПЕРАЦИЯ 2: Чтение строки из вектора
+──────────────────────────────────────
+1. Получить логическое значение:
+   logical_value_t value = v.value(index);
+
+2. Извлечь строку:
+   std::string str = *(value.value<std::string*>());
+   // или
+   std::string_view sv = value.value<std::string_view>();
+
+ОПЕРАЦИЯ 3: Работа с unified_vector_format
+────────────────────────────────────────────
+1. Создать и преобразовать вектор:
+   unified_vector_format format(resource, count);
+   v.to_unified_format(count, format);
+
+2. Получить типизированные данные:
+   auto string_data = format.get_data<std::string_view>();
+
+3. Обойти с индексацией и проверкой валидности:
+   for (size_t i = 0; i < count; i++) {
+       size_t idx = format.referenced_indexing->get_index(i);
+       if (format.validity.row_is_valid(idx)) {
+           const auto& str = string_data[idx];
+           // использовать str
+       } else {
+           // NULL значение
+       }
+   }
+
+ОПЕРАЦИЯ 4: Append операция (Arrow)
+────────────────────────────────────
+1. Преобразовать вектор в unified формат
+2. Получить string_view данные
+3. Для каждой строки:
+   - Проверить валидность
+   - Скопировать данные в auxiliary_buffer
+   - Обновить offset в main_buffer
+4. Финализировать Arrow структуру с 3 буферами:
+   - buffers[0]: validity (bitmap)
+   - buffers[1]: offsets (int64_t[])
+   - buffers[2]: data (char[])
+
+=============================================================================
+ВАЖНЫЕ НЮАНСЫ
+=============================================================================
+
+1. ХРАНЕНИЕ ДАННЫХ:
+   - Основной буфер vector_t содержит std::string_view[]
+   - Реальные данные строк хранятся в auxiliary (string_heap)
+   - string_heap управляет памятью и жизненным циклом строк
+
+2. INDEXED ACCESS:
+   - unified_vector_format.referenced_indexing указывает на индексацию
+   - Для FLAT векторов: incremental (0,1,2,...)
+   - Для CONSTANT: zero indexing (все 0)
+   - Для DICTIONARY: фактические индексы из словаря
+
+3. NULL HANDLING:
+   - Валидность хранится в validity_mask_t
+   - Проверка: validity.row_is_valid(index)
+   - При NULL в set_value() не копируется данные, только флаг
+
+4. MEMORY MANAGEMENT:
+   - string_vector_buffer_t использует custom string_heap
+   - string_heap управляет память через ссылки
+   - Overflow strings хранятся в отдельных буферах (refs_)
+
+=============================================================================

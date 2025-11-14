@@ -3,6 +3,7 @@ project(test_table)
 set(${PROJECT_NAME}_SOURCES
         test_column.cpp
         test_table.cpp
+        test_json.cpp
 )
 
 add_executable(${PROJECT_NAME} main.cpp ${${PROJECT_NAME}_SOURCES})
