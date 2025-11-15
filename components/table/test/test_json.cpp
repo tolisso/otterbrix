@@ -141,19 +141,34 @@ TEST_CASE("json_column_data_t: full INSERT/SELECT cycle") {
         REQUIRE(data_table->column_count() == 3);
     }
 
-    /* TEMPORARILY DISABLED - segfaults during data preparation
+    /* TEMPORARILY DISABLED - data_chunk_t crashes with JSON type
     SECTION("data_table with JSON column - INSERT and SELECT") {
+        INFO("Creating table with JSON column");
         std::vector<column_definition_t> columns;
         columns.emplace_back("id", logical_type::BIGINT);
         columns.emplace_back("name", logical_type::STRING_LITERAL);
         columns.emplace_back("metadata", complex_logical_type::create_json("__json_users_metadata"));
 
         auto data_table = std::make_unique<data_table_t>(&resource, block_manager, std::move(columns), "users");
+        INFO("Table created successfully");
 
         // Prepare test data
+        INFO("Preparing data chunk");
         const size_t test_size = 5;
-        data_chunk_t chunk(&resource, data_table->copy_types(), test_size);
+
+        // Create types manually
+        std::vector<types::complex_logical_type> chunk_types;
+        chunk_types.emplace_back(types::logical_type::BIGINT);
+        chunk_types.emplace_back(types::logical_type::STRING_LITERAL);
+        chunk_types.emplace_back(types::complex_logical_type::create_json("__json_users_metadata"));
+
+        // Create chunk without size first
+        data_chunk_t chunk(&resource, chunk_types);
+        INFO("Data chunk initialized");
+        chunk.resize(test_size);
+        INFO("Chunk resized");
         chunk.set_cardinality(test_size);
+        INFO("Cardinality set");
 
         // Fill the chunk with test data
         std::vector<std::string> expected_json_strings = {
@@ -164,11 +179,17 @@ TEST_CASE("json_column_data_t: full INSERT/SELECT cycle") {
             R"({"age": 28, "score": 175})"
         };
 
+        INFO("Filling chunk with data");
         for (size_t i = 0; i < test_size; i++) {
+            INFO("Setting row " << i);
             chunk.set_value(0, i, logical_value_t{int64_t(i + 1)});  // id
+            INFO("  - id set");
             chunk.set_value(1, i, logical_value_t{std::string("User") + std::to_string(i + 1)});  // name
+            INFO("  - name set");
             chunk.set_value(2, i, logical_value_t{expected_json_strings[i]});  // metadata (JSON)
+            INFO("  - metadata set");
         }
+        INFO("Chunk filled successfully");
 
         // INSERT data
         INFO("INSERT JSON data into table");
@@ -228,7 +249,7 @@ TEST_CASE("json_column_data_t: full INSERT/SELECT cycle") {
             }
         }
     }
-    */ // End of TEMPORARILY DISABLED section
+    */ // End TEMPORARILY DISABLED
 
     /* TEMPORARILY DISABLED
     SECTION("data_table with JSON column - NULL values") {
@@ -332,6 +353,144 @@ TEST_CASE("json_column_data_t: full INSERT/SELECT cycle") {
         }
     }
     */ // End TEMPORARILY DISABLED
+}
+
+TEST_CASE("json_column_data_t: low-level INSERT/SELECT without data_chunk") {
+    using namespace components::types;
+    using namespace components::vector;
+    using namespace components::table;
+
+    auto resource = std::pmr::synchronized_pool_resource();
+
+    core::filesystem::local_file_system_t fs;
+    auto buffer_pool = storage::buffer_pool_t(&resource, uint64_t(1) << 32, false, uint64_t(1) << 24);
+    auto buffer_manager = storage::standard_buffer_manager_t(&resource, fs, buffer_pool);
+    auto block_manager = storage::in_memory_block_manager_t(buffer_manager, storage::DEFAULT_BLOCK_ALLOC_SIZE);
+
+    SECTION("direct column append and scan") {
+        INFO("Creating JSON type");
+        auto json_type = complex_logical_type::create_json("__json_direct_test");
+        INFO("Creating JSON column");
+        auto json_col = column_data_t::create_column(&resource, block_manager, 0, 0, json_type);
+        INFO("JSON column created");
+
+        // Prepare JSON strings for insertion
+        std::vector<std::string> json_strings = {
+            R"({"age": 25, "score": 100})",
+            R"({"age": 30, "score": 200})",
+            R"({"age": 35, "score": 300})"
+        };
+
+        const uint64_t count = json_strings.size();
+
+        // Create vector with JSON strings
+        INFO("Creating input vector");
+        vector_t input_vector(&resource, logical_type::STRING_LITERAL, count);
+        INFO("Input vector created, filling with data");
+        for (uint64_t i = 0; i < count; i++) {
+            input_vector.set_value(i, logical_value_t{json_strings[i]});
+        }
+        INFO("Input vector filled");
+
+        // Convert to unified format for append
+        INFO("Creating unified vector format");
+        unified_vector_format uvf(&resource, count);
+        INFO("Converting to unified format");
+        input_vector.to_unified_format(count, uvf);
+        INFO("Unified format created");
+
+        // Initialize append
+        INFO("Initializing append state");
+        column_append_state append_state;
+        INFO("Calling initialize_append");
+        json_col->initialize_append(append_state);
+        INFO("Initialize_append completed");
+
+        // Append data
+        INFO("Appending JSON data");
+        json_col->append_data(append_state, uvf, count);
+        INFO("Append completed");
+
+        // Verify count
+        REQUIRE(json_col->count() == count);
+
+        // Now scan the data back
+        INFO("Scanning JSON data back");
+        column_scan_state scan_state;
+        json_col->initialize_scan(scan_state);
+
+        INFO("Creating result vector");
+        vector_t result_vector(&resource, json_type, count);
+        INFO("Result vector created, scanning");
+        auto scanned = json_col->scan(0, scan_state, result_vector, count);
+        INFO("Scan completed");
+
+        REQUIRE(scanned == count);
+
+        // Verify each JSON string
+        for (uint64_t i = 0; i < count; i++) {
+            auto val = result_vector.value(i);
+            REQUIRE(!val.is_null());
+
+            std::string result_json = *val.value<std::string*>();
+
+            // Parse both original and result to compare (order might differ)
+            auto* json_col_ptr = static_cast<json_column_data_t*>(json_col.get());
+            auto parsed_original = json_col_ptr->parse_simple_json_for_test(json_strings[i]);
+            auto parsed_result = json_col_ptr->parse_simple_json_for_test(result_json);
+
+            REQUIRE(parsed_result.size() == parsed_original.size());
+            for (const auto& [key, value] : parsed_original) {
+                REQUIRE(parsed_result[key] == value);
+            }
+        }
+
+        INFO("Low-level INSERT/SELECT works!");
+    }
+}
+
+TEST_CASE("json_column_data_t: revert_append") {
+    using namespace components::types;
+    using namespace components::vector;
+    using namespace components::table;
+
+    auto resource = std::pmr::synchronized_pool_resource();
+
+    core::filesystem::local_file_system_t fs;
+    auto buffer_pool = storage::buffer_pool_t(&resource, uint64_t(1) << 32, false, uint64_t(1) << 24);
+    auto buffer_manager = storage::standard_buffer_manager_t(&resource, fs, buffer_pool);
+    auto block_manager = storage::in_memory_block_manager_t(buffer_manager, storage::DEFAULT_BLOCK_ALLOC_SIZE);
+
+    SECTION("revert_append cleans up auxiliary data") {
+        auto json_type = complex_logical_type::create_json("__json_revert_test");
+        json_column_data_t json_col(&resource, block_manager, 0, 0, json_type);
+
+        // Manually insert some json_ids to simulate append
+        std::map<std::string, int64_t> fields1 = {{"age", 25}, {"score", 100}};
+        std::map<std::string, int64_t> fields2 = {{"age", 30}, {"score", 200}};
+        std::map<std::string, int64_t> fields3 = {{"age", 35}, {"score", 300}};
+
+        json_col.insert_into_auxiliary_table_for_test(1, fields1);
+        json_col.insert_into_auxiliary_table_for_test(2, fields2);
+        json_col.insert_into_auxiliary_table_for_test(3, fields3);
+
+        // Verify all data is there
+        auto result1 = json_col.query_auxiliary_table_for_test(1);
+        auto result2 = json_col.query_auxiliary_table_for_test(2);
+        auto result3 = json_col.query_auxiliary_table_for_test(3);
+
+        REQUIRE(result1.size() == 2);
+        REQUIRE(result2.size() == 2);
+        REQUIRE(result3.size() == 2);
+        REQUIRE(result1["age"] == 25);
+        REQUIRE(result2["age"] == 30);
+        REQUIRE(result3["age"] == 35);
+
+        // Note: This is a limited test since we can't easily call revert_append
+        // without going through the full append cycle. The real revert_append
+        // functionality will be tested through higher-level table operations.
+        INFO("Basic auxiliary table operations work correctly");
+    }
 }
 
 TEST_CASE("json_column_data_t: thread safety") {

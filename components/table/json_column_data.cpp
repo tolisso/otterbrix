@@ -187,9 +187,60 @@ namespace components::table {
     }
 
     void json_column_data_t::revert_append(int64_t start_row) {
+        // Read json_ids from base column before reverting
+        // We need to read them BEFORE calling column_data_t::revert_append()
+        // because that will delete the data
+
+        uint64_t current_count = count_.load();
+        if (start_row >= static_cast<int64_t>(current_count)) {
+            // Nothing to revert
+            column_data_t::revert_append(start_row);
+            validity.revert_append(start_row);
+            return;
+        }
+
+        uint64_t rows_to_revert = current_count - static_cast<uint64_t>(start_row);
+
+        if (rows_to_revert > 0) {
+            // Create temporary vector to read json_ids
+            vector::vector_t temp_vector(resource_,
+                types::complex_logical_type(types::logical_type::BIGINT),
+                rows_to_revert);
+
+            // Scan json_ids from base column starting at start_row
+            column_scan_state scan_state;
+            initialize_scan(scan_state);
+
+            // Skip to start_row
+            scan_state.row_index = static_cast<uint64_t>(start_row);
+
+            // Read the json_ids
+            auto scanned = column_data_t::scan(0, scan_state, temp_vector, rows_to_revert);
+
+            // Delete auxiliary data for all json_ids being reverted
+            {
+                std::lock_guard<std::mutex> lock(auxiliary_data_mutex_);
+
+                for (uint64_t i = 0; i < scanned; i++) {
+                    auto val = temp_vector.value(i);
+                    if (!val.is_null()) {
+                        int64_t json_id = *val.value<int64_t*>();
+                        if (json_id != 0) { // Skip NULL entries
+                            auxiliary_data_.erase(json_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Revert the base column data and validity
         column_data_t::revert_append(start_row);
         validity.revert_append(start_row);
-        // TODO: Also revert entries in auxiliary table
+
+        // In production with real tables, this would be:
+        // DELETE FROM auxiliary_table WHERE json_id IN (
+        //     SELECT json_id FROM main_table WHERE row_id >= start_row
+        // )
     }
 
     uint64_t json_column_data_t::fetch(column_scan_state& state, int64_t row_id, vector::vector_t& result) {
@@ -206,8 +257,68 @@ namespace components::table {
                                     vector::vector_t& update_vector,
                                     int64_t* row_ids,
                                     uint64_t update_count) {
-        // TODO: Update auxiliary table entries when updating JSON values
-        column_data_t::update(column_index, update_vector, row_ids, update_count);
+        // Update auxiliary table entries when updating JSON values
+        // Strategy: For each updated row:
+        // 1. Get the new JSON string from update_vector
+        // 2. Parse it into fields
+        // 3. Generate a new json_id
+        // 4. Insert into auxiliary table
+        // 5. Update main column with new json_id
+
+        // Create unified format from update_vector (contains JSON strings)
+        vector::unified_vector_format uvf(resource_, update_count);
+        update_vector.to_unified_format(update_count, uvf);
+
+        auto string_data = uvf.get_data<std::string_view>();
+
+        // Allocate memory for new json_ids
+        auto json_ids = std::unique_ptr<int64_t[]>(new int64_t[update_count]);
+
+        // For each row being updated
+        for (uint64_t i = 0; i < update_count; i++) {
+            auto idx = uvf.referenced_indexing->get_index(i);
+
+            // Handle NULL values
+            if (!uvf.validity.row_is_valid(idx)) {
+                json_ids[i] = 0; // NULL represented as 0
+                continue;
+            }
+
+            // Get the new JSON string
+            std::string json_string(string_data[idx]);
+
+            // Parse the new JSON
+            auto new_fields = parse_simple_json(json_string);
+
+            // Generate new json_id
+            int64_t new_json_id = next_json_id_.fetch_add(1);
+
+            // Insert new data into auxiliary table
+            insert_into_auxiliary_table(new_json_id, new_fields);
+
+            json_ids[i] = new_json_id;
+
+            // Note: In production, we would also:
+            // DELETE FROM auxiliary_table WHERE json_id = old_json_id
+            // to clean up old entries
+        }
+
+        // Create a new vector with json_ids (INT64) instead of JSON strings
+        vector::vector_t json_id_vector(resource_,
+                                        types::complex_logical_type(types::logical_type::BIGINT),
+                                        update_count);
+
+        // Copy json_ids into the vector
+        for (uint64_t i = 0; i < update_count; i++) {
+            if (uvf.validity.row_is_valid(uvf.referenced_indexing->get_index(i))) {
+                json_id_vector.set_value(i, types::logical_value_t{json_ids[i]});
+            } else {
+                json_id_vector.set_value(i, types::logical_value_t{});
+            }
+        }
+
+        // Update the base column with json_ids (INT64)
+        column_data_t::update(column_index, json_id_vector, row_ids, update_count);
         validity.update(column_index, update_vector, row_ids, update_count);
     }
 
