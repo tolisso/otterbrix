@@ -42,6 +42,10 @@ namespace components::table {
         // Validity tracking for NULL values
         validity_column_data_t validity;
 
+        // Bring base class overloads into scope to avoid hiding them
+        using column_data_t::scan;
+        using column_data_t::scan_committed;
+
         // Override column_data_t methods
         void set_start(uint64_t new_start) override;
 

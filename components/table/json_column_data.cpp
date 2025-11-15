@@ -88,6 +88,9 @@ namespace components::table {
         // Scan json_ids from base column
         auto scan_count = column_data_t::scan(vector_index, state, temp_vector, target_count);
 
+        // Scan validity FIRST before setting values
+        validity.scan(vector_index, state.child_states[0], result, target_count);
+
         // Convert json_ids to JSON strings
         for (uint64_t i = 0; i < scan_count; i++) {
             // Get the json_id value
@@ -100,7 +103,7 @@ namespace components::table {
             }
 
             // Extract json_id (stored as INT64)
-            int64_t json_id = *val.value<int64_t*>();
+            int64_t json_id = val.value<int64_t>();
 
             // Reconstruct JSON string from auxiliary table
             std::string json_str = read_json(json_id);
@@ -109,8 +112,6 @@ namespace components::table {
             result.set_value(i, types::logical_value_t{json_str});
         }
 
-        // Scan validity
-        validity.scan(vector_index, state.child_states[0], result, target_count);
         return scan_count;
     }
 

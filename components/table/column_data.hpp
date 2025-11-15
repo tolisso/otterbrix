@@ -47,8 +47,8 @@ namespace components::table {
         get_vector_scan_type(column_scan_state& state, uint64_t scan_count, vector::vector_t& result);
         virtual void initialize_scan(column_scan_state& state);
         virtual void initialize_scan_with_offset(column_scan_state& state, uint64_t row_idx);
-        uint64_t scan(uint64_t vector_index, column_scan_state& state, vector::vector_t& result);
-        uint64_t
+        virtual uint64_t scan(uint64_t vector_index, column_scan_state& state, vector::vector_t& result);
+        virtual uint64_t
         scan_committed(uint64_t vector_index, column_scan_state& state, vector::vector_t& result, bool allow_updates);
         virtual uint64_t
         scan(uint64_t vector_index, column_scan_state& state, vector::vector_t& result, uint64_t scan_count);
