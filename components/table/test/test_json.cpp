@@ -370,8 +370,8 @@ TEST_CASE("json_column_data_t: low-level INSERT/SELECT without data_chunk") {
     SECTION("direct column append and scan") {
         INFO("Creating JSON type");
         auto json_type = complex_logical_type::create_json("__json_direct_test");
-        INFO("Creating JSON column");
-        auto json_col = column_data_t::create_column(&resource, block_manager, 0, 0, json_type);
+        INFO("Creating JSON column directly");
+        json_column_data_t json_col(&resource, block_manager, 0, 0, json_type);
         INFO("JSON column created");
 
         // Prepare JSON strings for insertion
@@ -403,41 +403,53 @@ TEST_CASE("json_column_data_t: low-level INSERT/SELECT without data_chunk") {
         INFO("Initializing append state");
         column_append_state append_state;
         INFO("Calling initialize_append");
-        json_col->initialize_append(append_state);
+        json_col.initialize_append(append_state);
         INFO("Initialize_append completed");
 
         // Append data
         INFO("Appending JSON data");
-        json_col->append_data(append_state, uvf, count);
+        json_col.append_data(append_state, uvf, count);
         INFO("Append completed");
 
         // Verify count
-        REQUIRE(json_col->count() == count);
+        REQUIRE(json_col.count() == count);
 
         // Now scan the data back
         INFO("Scanning JSON data back");
         column_scan_state scan_state;
-        json_col->initialize_scan(scan_state);
+        INFO("Calling initialize_scan");
+        json_col.initialize_scan(scan_state);
+        INFO("initialize_scan completed");
 
         INFO("Creating result vector");
-        vector_t result_vector(&resource, json_type, count);
-        INFO("Result vector created, scanning");
-        auto scanned = json_col->scan(0, scan_state, result_vector, count);
+        // Use STRING_LITERAL type for result since scan returns JSON strings
+        vector_t result_vector(&resource, logical_type::STRING_LITERAL, count);
+        INFO("Result vector created");
+
+        INFO("Calling scan");
+        auto scanned = json_col.scan(0, scan_state, result_vector, count);
         INFO("Scan completed");
 
         REQUIRE(scanned == count);
 
         // Verify each JSON string
-        for (uint64_t i = 0; i < count; i++) {
+        INFO("Verifying results, scanned = " << scanned);
+
+        for (uint64_t i = 0; i < scanned; i++) {
+            INFO("Getting value at index " << i);
             auto val = result_vector.value(i);
+            INFO("Value retrieved, is_null = " << val.is_null());
             REQUIRE(!val.is_null());
 
-            std::string result_json = *val.value<std::string*>();
+            INFO("Getting string value");
+            auto* str_ptr = val.value<std::string*>();
+            INFO("Got string pointer");
+            std::string result_json = *str_ptr;
+            INFO("Got string: " << result_json);
 
             // Parse both original and result to compare (order might differ)
-            auto* json_col_ptr = static_cast<json_column_data_t*>(json_col.get());
-            auto parsed_original = json_col_ptr->parse_simple_json_for_test(json_strings[i]);
-            auto parsed_result = json_col_ptr->parse_simple_json_for_test(result_json);
+            auto parsed_original = json_col.parse_simple_json_for_test(json_strings[i]);
+            auto parsed_result = json_col.parse_simple_json_for_test(result_json);
 
             REQUIRE(parsed_result.size() == parsed_original.size());
             for (const auto& [key, value] : parsed_original) {

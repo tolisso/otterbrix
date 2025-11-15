@@ -46,12 +46,22 @@ namespace components::table {
     void json_column_data_t::initialize_scan(column_scan_state& state) {
         column_data_t::initialize_scan(state);
 
+        // Create child_states for validity
+        if (state.child_states.empty()) {
+            state.child_states.emplace_back();
+        }
+
         assert(state.child_states.size() == 1);
         validity.initialize_scan(state.child_states[0]);
     }
 
     void json_column_data_t::initialize_scan_with_offset(column_scan_state& state, uint64_t row_idx) {
         column_data_t::initialize_scan_with_offset(state, row_idx);
+
+        // Create child_states for validity
+        if (state.child_states.empty()) {
+            state.child_states.emplace_back();
+        }
 
         assert(state.child_states.size() == 1);
         validity.initialize_scan_with_offset(state.child_states[0], row_idx);

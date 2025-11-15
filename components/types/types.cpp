@@ -170,6 +170,8 @@ namespace components::types {
             case logical_type::ARRAY:
             case logical_type::STRUCT:
                 return 0; // no own payload
+            case logical_type::JSON:
+                return sizeof(int64_t); // JSON stores json_id as BIGINT
             default:
                 assert(false && "complex_logical_type::objest_size: reached unsupported type");
                 break;
@@ -216,6 +218,8 @@ namespace components::types {
             case logical_type::ARRAY:
             case logical_type::STRUCT:
                 return 0; // no own payload
+            case logical_type::JSON:
+                return alignof(int64_t); // JSON stores json_id as BIGINT
             default:
                 assert(false && "complex_logical_type::objest_size: reached unsupported type");
                 break;
