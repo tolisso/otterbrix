@@ -100,6 +100,10 @@ namespace services::collection::executor {
             plan = table::planner::create_plan(context_storage,
                                                logical_plan,
                                                components::logical_plan::limit_t::unlimit());
+        } else if (data_format == components::catalog::used_format_t::document_table) {
+            plan = document_table::planner::create_plan(context_storage,
+                                                        logical_plan,
+                                                        components::logical_plan::limit_t::unlimit());
         }
 
         if (!plan) {

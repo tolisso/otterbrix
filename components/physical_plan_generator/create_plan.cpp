@@ -87,3 +87,44 @@ namespace services::table::planner {
     }
 
 } // namespace services::table::planner
+
+namespace services::document_table::planner {
+
+    using components::logical_plan::node_type;
+
+    // Базовая реализация планировщика для document_table
+    // Пока используем те же операторы, что и для collection (B-tree)
+    // В будущем можно создать специализированные операторы
+    components::base::operators::operator_ptr create_plan(const context_storage_t& context,
+                                                          const components::logical_plan::node_ptr& node,
+                                                          components::logical_plan::limit_t limit) {
+        switch (node->type()) {
+            case node_type::aggregate_t:
+                return collection::planner::impl::create_plan_aggregate(context, node, std::move(limit));
+            case node_type::data_t:
+                return collection::planner::impl::create_plan_data(node);
+            case node_type::delete_t:
+                return collection::planner::impl::create_plan_delete(context, node);
+            case node_type::insert_t:
+                return collection::planner::impl::create_plan_insert(context, node, std::move(limit));
+            case node_type::match_t:
+                return collection::planner::impl::create_plan_match(context, node, std::move(limit));
+            case node_type::group_t:
+                return collection::planner::impl::create_plan_group(context, node);
+            case node_type::sort_t:
+                return collection::planner::impl::create_plan_sort(context, node);
+            case node_type::update_t:
+                return collection::planner::impl::create_plan_update(context, node);
+            case node_type::join_t:
+                return collection::planner::impl::create_plan_join(context, node, std::move(limit));
+            case node_type::create_index_t:
+                return collection::planner::impl::create_plan_add_index(context, node);
+            case node_type::drop_index_t:
+                return collection::planner::impl::create_plan_drop_index(context, node);
+            default:
+                break;
+        }
+        return nullptr;
+    }
+
+} // namespace services::document_table::planner

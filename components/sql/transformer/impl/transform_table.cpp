@@ -69,13 +69,37 @@ namespace components::sql::transform {
             columns.push_back(std::move(col));
         }
 
+        // Parse storage format from WITH options
+        components::catalog::used_format_t storage_format = components::catalog::used_format_t::undefined;
+        if (node.options) {
+            for (auto opt : node.options->lst) {
+                auto def_elem = pg_ptr_assert_cast<DefElem>(opt.data, T_DefElem);
+                if (std::string(def_elem->defname) == "storage") {
+                    auto storage_value = strVal(def_elem->arg);
+                    if (std::strcmp(storage_value, "document_table") == 0) {
+                        storage_format = components::catalog::used_format_t::document_table;
+                    } else if (std::strcmp(storage_value, "documents") == 0) {
+                        storage_format = components::catalog::used_format_t::documents;
+                    } else if (std::strcmp(storage_value, "columns") == 0) {
+                        storage_format = components::catalog::used_format_t::columns;
+                    } else {
+                        throw parser_exception_t{"Unknown storage format: " + std::string(storage_value), ""};
+                    }
+                }
+            }
+        }
+
         if (columns.empty()) {
-            return logical_plan::make_node_create_collection(resource_, rangevar_to_collection(node.relation));
+            return logical_plan::make_node_create_collection(resource_,
+                                                            rangevar_to_collection(node.relation),
+                                                            std::pmr::vector<complex_logical_type>(resource_),
+                                                            storage_format);
         }
 
         return logical_plan::make_node_create_collection(resource_,
                                                          rangevar_to_collection(node.relation),
-                                                         std::move(columns));
+                                                         std::move(columns),
+                                                         storage_format);
     }
 
     logical_plan::node_ptr transformer::transform_drop(DropStmt& node) {

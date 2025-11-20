@@ -22,8 +22,9 @@ namespace components::catalog {
 
     enum class used_format_t : uint8_t
     {
-        documents = 0,
-        columns = 1,
-        undefined = 2
+        documents = 0,      // B-tree document storage
+        columns = 1,        // Columnar data_table storage
+        document_table = 2, // Hybrid document_table storage
+        undefined = 3
     };
 } // namespace components::catalog
