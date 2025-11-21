@@ -12,6 +12,9 @@
 #include "impl/create_plan_sort.hpp"
 #include "impl/create_plan_update.hpp"
 
+// document_table specialized planners
+#include "impl/document_table/create_plan_match.hpp"
+
 namespace services::collection::planner {
 
     using components::logical_plan::node_type;
@@ -92,9 +95,15 @@ namespace services::document_table::planner {
 
     using components::logical_plan::node_type;
 
-    // Базовая реализация планировщика для document_table
-    // Пока используем те же операторы, что и для collection (B-tree)
-    // В будущем можно создать специализированные операторы
+    // Специализированный планировщик для document_table
+    // Использует колоночное хранилище с динамической схемой
+    //
+    // TODO: Оптимизация производительности запросов
+    // 1. Реализовать primary_key_scan для быстрого findOne({_id: "..."}) - O(1) вместо O(N)
+    // 2. Реализовать index_scan для поиска по индексированным полям - O(log N) вместо O(N)
+    // 3. После этого все операторы из table:: можно переиспользовать напрямую
+    //
+    // Текущее состояние: все запросы используют full_scan (O(N))
     components::base::operators::operator_ptr create_plan(const context_storage_t& context,
                                                           const components::logical_plan::node_ptr& node,
                                                           components::logical_plan::limit_t limit) {
@@ -108,7 +117,8 @@ namespace services::document_table::planner {
             case node_type::insert_t:
                 return collection::planner::impl::create_plan_insert(context, node, std::move(limit));
             case node_type::match_t:
-                return collection::planner::impl::create_plan_match(context, node, std::move(limit));
+                // Используем специализированный планировщик для document_table
+                return impl::create_plan_match(context, node, std::move(limit));
             case node_type::group_t:
                 return collection::planner::impl::create_plan_group(context, node);
             case node_type::sort_t:
