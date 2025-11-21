@@ -25,3 +25,8 @@ target_link_libraries(
         otterbrix::vector
         magic_enum::magic_enum
 )
+
+if (DEV_MODE)
+    add_definitions(-DDEV_MODE)
+    add_subdirectory(test)
+endif ()
