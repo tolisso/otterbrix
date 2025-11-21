@@ -112,8 +112,9 @@ namespace components::document_table {
         auto new_table =
             std::make_unique<table::data_table_t>(resource_, block_manager_, std::move(new_column_defs));
 
-        // Копируем существующие данные
-        if (table_ && table_->calculate_size() > 0) {
+        // Копируем существующие данные только если есть документы
+        // Используем size() вместо calculate_size() чтобы избежать проблем с пустой таблицей
+        if (table_ && size() > 0) {
             migrate_data(table_.get(), new_table.get(), new_columns);
         }
 

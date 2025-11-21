@@ -14,6 +14,7 @@ target_link_libraries(
         otterbrix::document_table
         otterbrix::physical_plan
         otterbrix::collection
+        otterbrix::test_generaty
         Catch2::Catch2
 )
 
