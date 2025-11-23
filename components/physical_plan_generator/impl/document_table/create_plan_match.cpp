@@ -5,6 +5,11 @@
 
 namespace services::document_table::planner::impl {
 
+    // Helper to check if context uses document_table storage
+    inline bool is_document_table_storage(collection::context_collection_t* ctx) {
+        return ctx && ctx->storage_type() == collection::storage_type_t::DOCUMENT_TABLE;
+    }
+
     // TODO: Добавить поддержку индексов для оптимизации запросов
     // bool is_can_index_find_by_predicate(components::expressions::compare_type compare) {
     //     using components::expressions::compare_type;
@@ -40,11 +45,11 @@ namespace services::document_table::planner::impl {
 
         // Для document_table всегда используем full_scan
         // Пока индексы не поддерживаются - все запросы делают полное сканирование (O(N))
-        if (context_) {
+        if (is_document_table_storage(context_)) {
             return boost::intrusive_ptr(
                 new components::document_table::operators::full_scan(context_, expr, limit));
         } else {
-            // Если нет контекста - используем table::operator_match для фильтрации data_chunk
+            // Если это не document_table - используем table::operator_match для фильтрации data_chunk
             return boost::intrusive_ptr(
                 new components::table::operators::operator_match_t(context_, expr, limit));
         }
@@ -54,15 +59,23 @@ namespace services::document_table::planner::impl {
     create_plan_match(const context_storage_t& context,
                       const components::logical_plan::node_ptr& node,
                       components::logical_plan::limit_t limit) {
+        auto ctx = context.at(node->collection_full_name());
+
+        // Проверяем что коллекция использует document_table storage
+        if (!is_document_table_storage(ctx)) {
+            throw std::runtime_error(
+                "create_plan_match called for non-document_table collection: " +
+                node->collection_full_name().to_string());
+        }
+
         if (node->expressions().empty()) {
             // Scan без фильтра
             return boost::intrusive_ptr(
-                new components::document_table::operators::full_scan(
-                    context.at(node->collection_full_name()), nullptr, limit));
+                new components::document_table::operators::full_scan(ctx, nullptr, limit));
         } else {
             auto expr = reinterpret_cast<const components::expressions::compare_expression_ptr*>(
                 &node->expressions()[0]);
-            return create_plan_match_(context.at(node->collection_full_name()), *expr, limit);
+            return create_plan_match_(ctx, *expr, limit);
         }
     }
 

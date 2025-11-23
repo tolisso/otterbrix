@@ -72,11 +72,6 @@ namespace components::document_table::operators {
         // TODO: Add proper logging when context has valid logger
         // trace(context_->log(), "document_table::full_scan");
 
-        int count = 0;
-        if (!limit_.check(count)) {
-            return; // limit = 0
-        }
-
         // Get storage and schema
         auto& storage = context_->document_table_storage().storage();
 
@@ -88,8 +83,19 @@ namespace components::document_table::operators {
             types.push_back(col_def.type());
         }
 
-        // Create output chunk
+        // Create output chunk (must be created even if limit=0 or empty collection)
         output_ = base::operators::make_operator_data(context_->resource(), types);
+
+        // Early return if limit is 0
+        int count = 0;
+        if (!limit_.check(count)) {
+            return; // limit = 0 - output is empty but valid
+        }
+
+        // Early return if collection is empty (no documents inserted yet)
+        if (storage.size() == 0) {
+            return;
+        }
 
         // Prepare column indices - scan all columns
         std::vector<table::storage_index_t> column_indices;

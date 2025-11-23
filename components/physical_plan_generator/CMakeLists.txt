@@ -13,7 +13,11 @@ set(${PROJECT_NAME}_SOURCES
         impl/create_plan_join.cpp
         impl/create_plan_add_index.cpp
         impl/create_plan_drop_index.cpp
+        impl/document_table/create_plan_aggregate.cpp
         impl/document_table/create_plan_match.cpp
+        impl/document_table/create_plan_insert.cpp
+        impl/document_table/create_plan_delete.cpp
+        impl/document_table/create_plan_update.cpp
 )
 
 add_library(otterbrix_${PROJECT_NAME}

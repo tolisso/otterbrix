@@ -13,7 +13,11 @@
 #include "impl/create_plan_update.hpp"
 
 // document_table specialized planners
+#include "impl/document_table/create_plan_aggregate.hpp"
 #include "impl/document_table/create_plan_match.hpp"
+#include "impl/document_table/create_plan_insert.hpp"
+#include "impl/document_table/create_plan_delete.hpp"
+#include "impl/document_table/create_plan_update.hpp"
 
 namespace services::collection::planner {
 
@@ -101,32 +105,41 @@ namespace services::document_table::planner {
     // TODO: Оптимизация производительности запросов
     // 1. Реализовать primary_key_scan для быстрого findOne({_id: "..."}) - O(1) вместо O(N)
     // 2. Реализовать index_scan для поиска по индексированным полям - O(log N) вместо O(N)
-    // 3. После этого все операторы из table:: можно переиспользовать напрямую
     //
-    // Текущее состояние: все запросы используют full_scan (O(N))
+    // Текущее состояние:
+    // - INSERT/UPDATE/DELETE используют document_table::operators::* с поддержкой schema evolution
+    // - SELECT использует full_scan (O(N)) - индексы не поддерживаются
+    // - GROUP BY/ORDER BY/JOIN используют table::operators::* (переиспользуются напрямую)
     components::base::operators::operator_ptr create_plan(const context_storage_t& context,
                                                           const components::logical_plan::node_ptr& node,
                                                           components::logical_plan::limit_t limit) {
         switch (node->type()) {
             case node_type::aggregate_t:
-                return collection::planner::impl::create_plan_aggregate(context, node, std::move(limit));
+                // Используем специализированный планировщик для document_table
+                return impl::create_plan_aggregate(context, node, std::move(limit));
             case node_type::data_t:
                 return collection::planner::impl::create_plan_data(node);
             case node_type::delete_t:
-                return collection::planner::impl::create_plan_delete(context, node);
+                // Используем специализированный планировщик для document_table
+                return impl::create_plan_delete(context, node);
             case node_type::insert_t:
-                return collection::planner::impl::create_plan_insert(context, node, std::move(limit));
+                // Используем специализированный планировщик для document_table
+                return impl::create_plan_insert(context, node, std::move(limit));
             case node_type::match_t:
                 // Используем специализированный планировщик для document_table
                 return impl::create_plan_match(context, node, std::move(limit));
             case node_type::group_t:
-                return collection::planner::impl::create_plan_group(context, node);
+                // GROUP BY работает с data_chunk - используем table planner
+                return table::planner::impl::create_plan_group(context, node);
             case node_type::sort_t:
-                return collection::planner::impl::create_plan_sort(context, node);
+                // ORDER BY работает с data_chunk - используем table planner
+                return table::planner::impl::create_plan_sort(context, node);
             case node_type::update_t:
-                return collection::planner::impl::create_plan_update(context, node);
+                // Используем специализированный планировщик для document_table
+                return impl::create_plan_update(context, node);
             case node_type::join_t:
-                return collection::planner::impl::create_plan_join(context, node, std::move(limit));
+                // JOIN работает с data_chunk - используем table planner
+                return table::planner::impl::create_plan_join(context, node, std::move(limit));
             case node_type::create_index_t:
                 return collection::planner::impl::create_plan_add_index(context, node);
             case node_type::drop_index_t:

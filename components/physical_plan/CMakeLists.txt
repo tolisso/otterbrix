@@ -83,6 +83,7 @@ set(${PROJECT_NAME}_SOURCES
         table/operators/transformation.cpp
 
         document_table/operators/scan/full_scan.cpp
+        document_table/operators/aggregation.cpp
         document_table/operators/operator_insert.cpp
         document_table/operators/operator_delete.cpp
         document_table/operators/operator_update.cpp

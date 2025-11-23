@@ -278,7 +278,17 @@ namespace services::dispatcher {
                 if (check_result->is_error()) {
                     error = std::move(check_result);
                 } else {
-                    used_format = check_result->uses_table_data() ? used_format_t::columns : used_format_t::documents;
+                    // Получаем реальный формат из catalog, а не полагаемся на uses_table_data()
+                    // которая не различает columns и document_table
+                    if (!logic_plan->collection_full_name().empty()) {
+                        table_id tid(resource(), logic_plan->collection_full_name());
+                        used_format = catalog_.get_table_format(tid);
+                        std::cout << "[DEBUG DISPATCHER] Collection: " << logic_plan->collection_full_name().to_string()
+                                  << ", format from catalog: " << static_cast<int>(used_format) << std::endl << std::flush;
+                    } else {
+                        // Для запросов без коллекции (raw data) определяем по типу данных
+                        used_format = check_result->uses_table_data() ? used_format_t::columns : used_format_t::documents;
+                    }
                 }
             }
         }
@@ -649,6 +659,9 @@ namespace services::dispatcher {
             case used_format_t::documents:
                 return make_cursor(resource(), std::pmr::vector<document_ptr>{resource()});
             case used_format_t::columns:
+                return make_cursor(resource(), components::vector::data_chunk_t{resource(), {}, 0});
+            case used_format_t::document_table:
+                // document_table также использует data_chunk, но нуждается в специальных операторах
                 return make_cursor(resource(), components::vector::data_chunk_t{resource(), {}, 0});
             case used_format_t::undefined:
                 return make_cursor(resource(), error_code_t::incompatible_storage_types, "undefined storage format");

@@ -2,6 +2,7 @@ project(test_document_table)
 
 set(${PROJECT_NAME}_SOURCES
         test_operators.cpp
+        test_comprehensive.cpp
         )
 
 add_executable(otterbrix_${PROJECT_NAME}
