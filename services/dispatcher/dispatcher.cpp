@@ -686,7 +686,8 @@ namespace services::dispatcher {
             case node_type::create_collection_t: {
                 auto node_info = reinterpret_cast<node_create_collection_ptr&>(node);
                 if (node_info->schema().empty()) {
-                    auto err = catalog_.create_computing_table(id);
+                    // Передаём storage_format из логического плана в catalog
+                    auto err = catalog_.create_computing_table(id, node_info->storage_format());
                     assert(!err);
                 } else {
                     std::vector<components::types::field_description> desc;

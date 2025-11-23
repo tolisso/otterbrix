@@ -1,6 +1,7 @@
 #pragma once
 
 #include "schema.hpp"
+#include "table_metadata.hpp"
 #include "versioned_trie/versioned_trie.hpp"
 
 #include <components/base/collection_full_name.hpp>
@@ -11,7 +12,7 @@
 namespace components::catalog {
     class computed_schema {
     public:
-        explicit computed_schema(std::pmr::memory_resource* resource);
+        explicit computed_schema(std::pmr::memory_resource* resource, used_format_t format = used_format_t::documents);
 
         void append(std::pmr::string json, const types::complex_logical_type& type);
         void drop(std::pmr::string json, const types::complex_logical_type& type);
@@ -19,6 +20,7 @@ namespace components::catalog {
 
         [[nodiscard]] std::vector<types::complex_logical_type> find_field_versions(const std::pmr::string& name) const;
         [[nodiscard]] types::complex_logical_type latest_types_struct() const;
+        [[nodiscard]] used_format_t storage_format() const;
 
     private:
         using refcounted_entry_t = std::reference_wrapper<const versioned_value<types::complex_logical_type>>;
@@ -30,5 +32,6 @@ namespace components::catalog {
 
         versioned_trie<std::pmr::string, types::complex_logical_type> fields_;
         std::pmr::unordered_map<std::pmr::string, refcounted_entry_t> existing_versions_;
+        used_format_t storage_format_;
     };
 } // namespace components::catalog

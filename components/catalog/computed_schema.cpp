@@ -1,9 +1,10 @@
 #include "computed_schema.hpp"
 
 namespace components::catalog {
-    computed_schema::computed_schema(std::pmr::memory_resource* resource)
+    computed_schema::computed_schema(std::pmr::memory_resource* resource, used_format_t format)
         : fields_(resource)
-        , existing_versions_(resource) {}
+        , existing_versions_(resource)
+        , storage_format_(format) {}
 
     void computed_schema::append(std::pmr::string json, const types::complex_logical_type& type) {
         if (try_use_refcout(json, type, true)) {
@@ -95,5 +96,9 @@ namespace components::catalog {
         }
 
         return false;
+    }
+
+    used_format_t computed_schema::storage_format() const {
+        return storage_format_;
     }
 } // namespace components::catalog

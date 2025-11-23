@@ -59,7 +59,8 @@ namespace components::catalog {
             const auto& info = namespaces_.get_namespace_info(id.get_namespace()).computing;
             auto it = info.find(id.table_name());
             if (it != info.end()) {
-                return used_format_t::documents;
+                // Возвращаем сохранённый формат вместо хардкода documents
+                return it->second.storage_format();
             }
         }
 
@@ -86,7 +87,7 @@ namespace components::catalog {
         return {};
     }
 
-    catalog_error catalog::create_computing_table(const table_id& id) {
+    catalog_error catalog::create_computing_table(const table_id& id, used_format_t format) {
         if (!namespace_exists(id.get_namespace())) {
             return {catalog_mistake_t::MISSING_NAMESPACE, "Namespace does not exist for table: " + id.to_string()};
         }
@@ -96,7 +97,7 @@ namespace components::catalog {
         }
 
         namespaces_.get_namespace_info(id.get_namespace())
-            .computing.emplace(id.table_name(), computed_schema(resource_));
+            .computing.emplace(id.table_name(), computed_schema(resource_, format));
         return {};
     }
 
