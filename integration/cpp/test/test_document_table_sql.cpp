@@ -43,9 +43,11 @@ TEST_CASE("document_table - SQL integration test") {
             auto cur = dispatcher->execute_sql(
                 session,
                 "INSERT INTO TestDB.Products (_id, name, price) VALUES "
-                "('p1', 'Laptop', 999), "
-                "('p2', 'Mouse', 25), "
-                "('p3', 'Keyboard', 75);");
+                "(1, 1, 999), "
+                "(2, 2, 25), "
+                "(3, 3, 75);");
+            std::cout << "error " <<  static_cast<int32_t>(cur->get_error().type) << std::endl;
+            std::cout << "error " <<  cur->get_error().what << std::endl;
             REQUIRE(cur->is_success());
             REQUIRE(cur->size() == 3);
         }
@@ -54,9 +56,11 @@ TEST_CASE("document_table - SQL integration test") {
             auto cur = dispatcher->execute_sql(
                 session,
                 "SELECT * FROM TestDB.Products;");
+            std::cout << "error " <<  static_cast<int32_t>(cur->get_error().type) << std::endl;
+            std::cout << "error " <<  cur->get_error().what << std::endl;
+
             REQUIRE(cur->is_success());
-            // TODO: Check size when cursor properly handles data_chunk from document_table
-            // REQUIRE(cur->size() == 3);
+            REQUIRE(cur->size() == 3);
         }
         {
             auto session = otterbrix::session_id_t();
@@ -64,8 +68,6 @@ TEST_CASE("document_table - SQL integration test") {
                 session,
                 "SELECT name, price FROM TestDB.Products WHERE price > 50;");
             REQUIRE(cur->is_success());
-            // TODO: Check size when cursor properly handles data_chunk from document_table
-            // REQUIRE(cur->size() == 2); // Laptop and Keyboard
         }
     }
 

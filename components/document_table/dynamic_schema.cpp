@@ -9,7 +9,9 @@ namespace components::document_table {
         , extractor_(std::make_unique<json_path_extractor_t>(resource)) {
 
         // Всегда добавляем служебную колонку для document_id
-        add_column("_id", types::complex_logical_type(types::logical_type::STRING_LITERAL));
+        types::complex_logical_type id_type(types::logical_type::STRING_LITERAL);
+        id_type.set_alias("_id");
+        add_column("_id", id_type);
     }
 
     bool dynamic_schema_t::has_path(const std::string& json_path) const {

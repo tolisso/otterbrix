@@ -616,12 +616,18 @@ namespace services::dispatcher {
                 const auto* data_node = reinterpret_cast<const components::logical_plan::node_data_t*>(node);
                 if (check == used_format_t::undefined) {
                     check = static_cast<used_format_t>(data_node->uses_data_chunk());
-                } else if (check != static_cast<used_format_t>(data_node->uses_data_chunk())) {
-                    result =
-                        make_cursor(resource(),
-                                    error_code_t::incompatible_storage_types,
-                                    "logical plan data format is not the same as referenced collection data format");
-                    return false;
+                } else {
+                    // Both columns and document_table use data chunks, so they're compatible
+                    bool check_uses_chunks = (check == used_format_t::columns || check == used_format_t::document_table);
+                    bool data_uses_chunks = data_node->uses_data_chunk();
+
+                    if (check_uses_chunks != data_uses_chunks) {
+                        result =
+                            make_cursor(resource(),
+                                        error_code_t::incompatible_storage_types,
+                                        "logical plan data format is not the same as referenced collection data format");
+                        return false;
+                    }
                 }
             }
 
@@ -634,6 +640,19 @@ namespace services::dispatcher {
             } else if (check == used_format_t::undefined) {
                 return true;
             }
+
+            // Allow compatibility between columns and document_table (both use data chunks)
+            bool used_is_chunk = (used_format == used_format_t::columns || used_format == used_format_t::document_table);
+            bool check_is_chunk = (check == used_format_t::columns || check == used_format_t::document_table);
+            if (used_is_chunk && check_is_chunk) {
+                return true;
+            }
+
+            // Allow documents to be inserted into document_table (physical plan will handle conversion)
+            if (used_format == used_format_t::document_table && check == used_format_t::documents) {
+                return true;
+            }
+
             result = make_cursor(resource(),
                                  error_code_t::incompatible_storage_types,
                                  "logical plan data format is not the same as referenced collection data format");
