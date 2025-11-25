@@ -1,4 +1,5 @@
 #include "dynamic_schema.hpp"
+#include <stdexcept>
 
 namespace components::document_table {
 
@@ -81,9 +82,21 @@ namespace components::document_table {
 
         // Проходим по всем путям
         for (const auto& path_info : extracted_paths) {
-            // Если путь уже существует, пропускаем
+            // Если путь уже существует, проверяем совместимость типов
             if (has_path(path_info.path)) {
-                // TODO: проверить совместимость типов
+                const auto* existing_col = get_column_info(path_info.path);
+                if (existing_col) {
+                    auto existing_type = existing_col->type.type();
+                    auto new_type = path_info.type;
+
+                    // Проверяем, что типы совпадают
+                    if (existing_type != new_type) {
+                        throw std::runtime_error(
+                            "Type mismatch for path '" + path_info.path + "': " +
+                            "existing type is " + std::to_string(static_cast<int>(existing_type)) +
+                            ", but document has type " + std::to_string(static_cast<int>(new_type)));
+                    }
+                }
                 continue;
             }
 

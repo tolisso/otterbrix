@@ -70,27 +70,32 @@ namespace components::document_table::operators {
                 continue;
             }
 
-            // Extract document ID from the document
-            document::document_id_t doc_id = document::get_document_id(doc);
-            std::cerr << "[DEBUG operator_insert] Inserting document with id=" << doc_id.to_string() << std::endl;
-            std::cerr.flush();
-
-            // Insert document - storage handles schema evolution
-            storage.insert(doc_id, doc);
-
-            // Track the row_id in modified
-            size_t row_id;
-            if (storage.get_row_id(doc_id, row_id)) {
-                modified_->append(row_id);
-                inserted_count++;
-                std::cerr << "[DEBUG operator_insert] Document inserted, row_id=" << row_id << std::endl;
+            try {
+                // Extract document ID from the document
+                document::document_id_t doc_id = document::get_document_id(doc);
+                std::cerr << "[DEBUG operator_insert] Inserting document with id=" << doc_id.to_string() << std::endl;
                 std::cerr.flush();
 
-                // TODO: Index insertion needs proper chunk data
-                // For now we skip indexing in document_table
-                // if (pipeline_context) {
-                //     context_->index_engine()->insert_row(chunk, row_id, pipeline_context);
-                // }
+                // Insert document - storage handles schema evolution
+                storage.insert(doc_id, doc);
+
+                // Track the row_id in modified
+                size_t row_id;
+                if (storage.get_row_id(doc_id, row_id)) {
+                    modified_->append(row_id);
+                    inserted_count++;
+                    std::cerr << "[DEBUG operator_insert] Document inserted, row_id=" << row_id << std::endl;
+                    std::cerr.flush();
+
+                    // TODO: Index insertion needs proper chunk data
+                    // For now we skip indexing in document_table
+                    // if (pipeline_context) {
+                    //     context_->index_engine()->insert_row(chunk, row_id, pipeline_context);
+                    // }
+                }
+            } catch (const std::runtime_error& e) {
+                // Re-throw to propagate error up to executor
+                throw;
             }
         }
 

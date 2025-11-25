@@ -1,6 +1,7 @@
 #include "json_path_extractor.hpp"
 #include <components/document/container/json_array.hpp>
 #include <components/document/container/json_object.hpp>
+#include <stdexcept>
 
 namespace components::document_table {
 
@@ -87,7 +88,16 @@ namespace components::document_table {
 
             } else if (config_.flatten_arrays) {
                 // Вариант 2: Разворачиваем в колонки array[0], array[1], ...
-                size_t max_index = std::min(arr->size(), config_.max_array_size);
+
+                // Проверяем размер массива
+                if (arr->size() > config_.max_array_size) {
+                    throw std::runtime_error(
+                        "Array size exceeded limit for path '" + current_path + "': " +
+                        "array has " + std::to_string(arr->size()) + " elements, " +
+                        "but max_array_size is " + std::to_string(config_.max_array_size));
+                }
+
+                size_t max_index = arr->size();
 
                 for (size_t i = 0; i < max_index; ++i) {
                     const auto* elem_node = arr->get(i);
