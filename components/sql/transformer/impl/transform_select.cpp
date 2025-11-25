@@ -102,9 +102,19 @@ namespace components::sql::transform {
                     case T_FuncCall: {
                         // group
                         auto func = pg_ptr_cast<FuncCall>(res->val);
-                        auto arg = std::string{
-                            strVal(pg_ptr_cast<ColumnRef>(func->args->lst.front().data)->fields->lst.front().data)};
                         auto funcname = std::string{strVal(func->funcname->lst.front().data)};
+
+                        std::string arg;
+                        // Check if the argument is * (like COUNT(*))
+                        if (func->args && !func->args->lst.empty()) {
+                            auto first_arg = func->args->lst.front().data;
+                            if (nodeTag(first_arg) == T_A_Star) {
+                                arg = "*";
+                            } else if (nodeTag(first_arg) == T_ColumnRef) {
+                                arg = std::string{
+                                    strVal(pg_ptr_cast<ColumnRef>(first_arg)->fields->lst.front().data)};
+                            }
+                        }
 
                         std::string expr_name;
                         if (res->name) {
