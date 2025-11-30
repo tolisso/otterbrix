@@ -3,6 +3,8 @@ project(test_document_table)
 set(${PROJECT_NAME}_SOURCES
         test_operators.cpp
         test_comprehensive.cpp
+        test_union_types.cpp
+        test_union_integration.cpp
         )
 
 add_executable(otterbrix_${PROJECT_NAME}

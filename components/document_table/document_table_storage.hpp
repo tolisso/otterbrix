@@ -78,6 +78,14 @@ namespace components::document_table {
         // Конвертация row обратно в документ
         document::document_ptr row_to_document(const vector::data_chunk_t& row, size_t row_idx);
 
+        // Вспомогательные методы для работы с union типами
+        types::logical_value_t extract_value_from_document(const document::document_ptr& doc,
+                                                           const std::string& json_path,
+                                                           types::logical_type expected_type);
+        
+        types::logical_type detect_value_type_in_document(const document::document_ptr& doc,
+                                                          const std::string& json_path);
+
         std::pmr::memory_resource* resource_;
         table::storage::block_manager_t& block_manager_;
 

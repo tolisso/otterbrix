@@ -45,11 +45,14 @@ namespace components::document_table {
 
         // Добавляем новую колонку
         size_t new_index = columns_.size();
-        columns_.push_back(column_info_t{.json_path = json_path,
-                                         .type = type,
-                                         .column_index = new_index,
-                                         .is_array_element = is_array_element,
-                                         .array_index = array_index});
+        column_info_t new_col(resource_);
+        new_col.json_path = json_path;
+        new_col.type = type;
+        new_col.column_index = new_index;
+        new_col.is_array_element = is_array_element;
+        new_col.array_index = array_index;
+        
+        columns_.push_back(std::move(new_col));
 
         // Обновляем маппинг
         path_to_index_[json_path] = new_index;
@@ -91,10 +94,16 @@ namespace components::document_table {
 
                     // Проверяем, что типы совпадают
                     if (existing_type != new_type) {
-                        throw std::runtime_error(
-                            "Type mismatch for path '" + path_info.path + "': " +
-                            "existing type is " + std::to_string(static_cast<int>(existing_type)) +
-                            ", but document has type " + std::to_string(static_cast<int>(new_type)));
+                        // UNION SUPPORT: вместо ошибки, создаем/расширяем union
+                        if (existing_col->is_union) {
+                            // Уже union - добавить новый тип если его нет
+                            extend_union_column(path_info.path, new_type);
+                        } else {
+                            // Первое несовпадение - создать union из двух типов
+                            create_union_column(path_info.path, existing_type, new_type);
+                        }
+                        // Схема изменилась - возвращаем обновленную колонку
+                        new_columns.push_back(*get_column_info(path_info.path));
                     }
                 }
                 continue;
@@ -111,6 +120,57 @@ namespace components::document_table {
         }
 
         return new_columns;
+    }
+
+    void dynamic_schema_t::create_union_column(const std::string& json_path,
+                                               types::logical_type type1,
+                                               types::logical_type type2) {
+        auto it = path_to_index_.find(json_path);
+        if (it == path_to_index_.end()) {
+            return;
+        }
+
+        auto& col = columns_[it->second];
+
+        // ВРЕМЕННОЕ РЕШЕНИЕ: вместо создания UNION type, оставляем первый тип
+        // col.type уже установлен как type1, не меняем его
+        col.is_union = true;
+        col.union_types.clear();
+        col.union_types.push_back(type1);
+        col.union_types.push_back(type2);
+    }
+
+    void dynamic_schema_t::extend_union_column(const std::string& json_path, types::logical_type new_type) {
+        auto it = path_to_index_.find(json_path);
+        if (it == path_to_index_.end()) {
+            return;
+        }
+
+        auto& col = columns_[it->second];
+
+        // Проверяем, что тип еще не в union
+        if (std::find(col.union_types.begin(), col.union_types.end(), new_type) != col.union_types.end()) {
+            return; // Уже есть
+        }
+
+        // Добавляем новый тип в union
+        col.union_types.push_back(new_type);
+
+        // ВРЕМЕННОЕ РЕШЕНИЕ: не меняем col.type, оставляем первый тип
+    }
+
+    uint8_t dynamic_schema_t::get_union_tag(const column_info_t* col, types::logical_type type) const {
+        if (!col || !col->is_union) {
+            return 0;
+        }
+
+        auto it = std::find(col->union_types.begin(), col->union_types.end(), type);
+        if (it == col->union_types.end()) {
+            throw std::runtime_error("Type " + std::to_string(static_cast<int>(type)) +
+                                     " not found in union for path '" + col->json_path + "'");
+        }
+
+        return static_cast<uint8_t>(std::distance(col->union_types.begin(), it));
     }
 
 } // namespace components::document_table

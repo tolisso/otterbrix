@@ -161,7 +161,8 @@ namespace components::types {
                 return sizeof(list_entry_t);
             case logical_type::ARRAY:
             case logical_type::STRUCT:
-                return 0; // no own payload
+            case logical_type::UNION:
+                return 0; // no own payload (stored as children)
             default:
                 assert(false && "complex_logical_type::objest_size: reached unsupported type");
                 break;
@@ -207,6 +208,7 @@ namespace components::types {
                 return alignof(list_entry_t);
             case logical_type::ARRAY:
             case logical_type::STRUCT:
+            case logical_type::UNION:
                 return 0; // no own payload
             default:
                 assert(false && "complex_logical_type::objest_size: reached unsupported type");
@@ -260,6 +262,8 @@ namespace components::types {
                 return physical_type::STRUCT;
             case logical_type::LIST:
                 return physical_type::LIST;
+            case logical_type::UNION:
+                return physical_type::UNION;
             default:
                 return physical_type::INVALID;
         }

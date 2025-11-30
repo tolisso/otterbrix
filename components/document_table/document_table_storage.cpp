@@ -261,6 +261,31 @@ namespace components::document_table {
                 }
                 break;
 
+            case types::logical_type::UNION:
+                // ВРЕМЕННОЕ РЕШЕНИЕ: для UNION колонок сохраняем данные в их фактическом типе
+                // Schema отслеживает что колонка может содержать разные типы
+                if (col_info->is_union) {
+                    // Определяем фактический тип значения в документе
+                    auto actual_type = detect_value_type_in_document(doc, col_info->json_path);
+
+                    if (actual_type == types::logical_type::NA) {
+                        vec.set_null(0, true);
+                        break;
+                    }
+
+                    // Извлекаем значение нужного типа и сохраняем напрямую
+                    auto value = extract_value_from_document(doc, col_info->json_path, actual_type);
+
+                    if (value.is_null()) {
+                        vec.set_null(0, true);
+                    } else {
+                        vec.set_value(0, std::move(value));
+                    }
+                } else {
+                    vec.set_null(0, true);
+                }
+                break;
+
             default:
                 vec.set_null(0, true);
                 break;
@@ -275,6 +300,100 @@ namespace components::document_table {
         // TODO: реализовать конвертацию row -> document
         // Это более сложная операция, требует создания JSON документа из значений
         return nullptr;
+    }
+
+    types::logical_type document_table_storage_t::detect_value_type_in_document(const document::document_ptr& doc,
+                                                                                const std::string& json_path) {
+        if (!doc || !doc->is_exists(json_path)) {
+            return types::logical_type::NA;
+        }
+
+        // Проверяем типы в порядке приоритета
+        if (doc->is_bool(json_path)) {
+            return types::logical_type::BOOLEAN;
+        }
+        if (doc->is_int(json_path)) {
+            return types::logical_type::INTEGER;
+        }
+        if (doc->is_long(json_path)) {
+            return types::logical_type::BIGINT;
+        }
+        if (doc->is_ulong(json_path)) {
+            return types::logical_type::UBIGINT;
+        }
+        if (doc->is_double(json_path)) {
+            return types::logical_type::DOUBLE;
+        }
+        if (doc->is_float(json_path)) {
+            return types::logical_type::FLOAT;
+        }
+        if (doc->is_string(json_path)) {
+            return types::logical_type::STRING_LITERAL;
+        }
+
+        return types::logical_type::NA;
+    }
+
+    types::logical_value_t document_table_storage_t::extract_value_from_document(
+        const document::document_ptr& doc,
+        const std::string& json_path,
+        types::logical_type expected_type) {
+
+        if (!doc || !doc->is_exists(json_path)) {
+            return types::logical_value_t(); // null value
+        }
+
+        // Извлекаем значение в зависимости от ожидаемого типа
+        switch (expected_type) {
+        case types::logical_type::BOOLEAN:
+            if (doc->is_bool(json_path)) {
+                return types::logical_value_t(doc->get_bool(json_path));
+            }
+            break;
+
+        case types::logical_type::INTEGER:
+            if (doc->is_int(json_path)) {
+                return types::logical_value_t(doc->get_int(json_path));
+            }
+            break;
+
+        case types::logical_type::BIGINT:
+            if (doc->is_long(json_path)) {
+                return types::logical_value_t(doc->get_long(json_path));
+            }
+            break;
+
+        case types::logical_type::UBIGINT:
+            if (doc->is_ulong(json_path)) {
+                return types::logical_value_t(doc->get_ulong(json_path));
+            }
+            break;
+
+        case types::logical_type::DOUBLE:
+            if (doc->is_double(json_path)) {
+                return types::logical_value_t(doc->get_double(json_path));
+            }
+            break;
+
+        case types::logical_type::FLOAT:
+            if (doc->is_float(json_path)) {
+                return types::logical_value_t(doc->get_float(json_path));
+            }
+            break;
+
+        case types::logical_type::STRING_LITERAL:
+            if (doc->is_string(json_path)) {
+                std::string str_val(doc->get_string(json_path));
+                return types::logical_value_t(str_val);
+            }
+            break;
+
+        default:
+            break;
+        }
+
+        // Если тип не совпал, возвращаем null
+        return types::logical_value_t();
     }
 
 } // namespace components::document_table

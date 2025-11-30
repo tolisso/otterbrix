@@ -13,11 +13,31 @@
 namespace components::document_table {
 
     struct column_info_t {
+        column_info_t(std::pmr::memory_resource* resource)
+            : union_types(resource) {}
+        
+        column_info_t(const column_info_t& other)
+            : json_path(other.json_path)
+            , type(other.type)
+            , column_index(other.column_index)
+            , is_array_element(other.is_array_element)
+            , array_index(other.array_index)
+            , is_union(other.is_union)
+            , union_types(other.union_types) {}
+        
+        column_info_t(column_info_t&&) = default;
+        column_info_t& operator=(const column_info_t&) = default;
+        column_info_t& operator=(column_info_t&&) = default;
+        
         std::string json_path;               // JSON path (например, "user.address.city")
-        types::complex_logical_type type;    // Тип колонки
-        size_t column_index;                 // Индекс колонки в таблице
-        bool is_array_element;               // Элемент массива?
-        size_t array_index;                  // Индекс в массиве
+        types::complex_logical_type type;    // Тип колонки (может быть UNION!)
+        size_t column_index = 0;             // Индекс колонки в таблице
+        bool is_array_element = false;       // Элемент массива?
+        size_t array_index = 0;              // Индекс в массиве
+        
+        // Union type support
+        bool is_union = false;               // Является ли колонка union типом?
+        std::pmr::vector<types::logical_type> union_types; // Типы в union (в порядке добавления)
     };
 
     class dynamic_schema_t {
@@ -55,7 +75,17 @@ namespace components::document_table {
         json_path_extractor_t& extractor() { return *extractor_; }
         const json_path_extractor_t& extractor() const { return *extractor_; }
 
+        // Работа с union типами
+        uint8_t get_union_tag(const column_info_t* col, types::logical_type type) const;
+
     private:
+        // Создание union колонки из двух типов
+        void create_union_column(const std::string& json_path,
+                                types::logical_type type1,
+                                types::logical_type type2);
+        
+        // Расширение существующего union новым типом
+        void extend_union_column(const std::string& json_path, types::logical_type new_type);
         std::pmr::memory_resource* resource_;
 
         // Список всех колонок в порядке добавления
