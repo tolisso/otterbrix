@@ -201,7 +201,14 @@ python3 test_syntax.py  # скрипт из 02_OTTERBRIX_API_REFERENCE.md
 - [ ] Прочитать `00_START_HERE.md` (этот файл)
 - [ ] Прочитать `README.md` 
 - [ ] Бегло просмотреть `00_INTEGRATION_PLAN.md`
-- [ ] Установить Otterbrix: `pip install otterbrix`
+- [ ] Собрать локальный Otterbrix из `/home/tolisso/otterbrix/`
+  ```bash
+  cd /home/tolisso/otterbrix
+  mkdir -p build && cd build
+  conan install ../conanfile.py --build missing -s build_type=Release -s compiler.cppstd=gnu17
+  cmake .. -G Ninja -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release -DDEV_MODE=ON
+  cmake --build . --target all -- -j $(nproc)
+  ```
 
 ### День 1 (изучение): 4-6 часов
 - [ ] Детально изучить `01_TECHNICAL_REQUIREMENTS.md`
@@ -297,11 +304,16 @@ python3 test_syntax.py  # скрипт из 02_OTTERBRIX_API_REFERENCE.md
 
 ### Если вы готовы начать СЕЙЧАС:
 ```bash
-# Перейдите к следующим шагам
-cat 06_NEXT_STEPS.md
+# 1. Убедитесь что Otterbrix собран
+cd /home/tolisso/otterbrix
+ls -la build/integration/python/  # Должна быть директория
 
-# Начните с тестирования API
+# 2. Перейдите к следующим шагам
+cat for_ai/JSONBench/06_NEXT_STEPS.md
+
+# 3. Начните с тестирования API
 cd /home/tolisso/otterbrix/for_ai/JSONBench
+export PYTHONPATH=/home/tolisso/otterbrix/build/integration/python:$PYTHONPATH
 # Создайте test_syntax.py из 02_OTTERBRIX_API_REFERENCE.md
 python3 test_syntax.py
 ```

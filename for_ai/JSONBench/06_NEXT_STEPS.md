@@ -2,9 +2,39 @@
 
 ## 🎯 Немедленные действия
 
-### 1. Тестирование Python API Otterbrix (1-2 часа)
+### 1. Сборка и тестирование локального Otterbrix (1-2 часа)
 
-Создайте и запустите тестовый скрипт для проверки возможностей Otterbrix:
+Сначала убедитесь что Otterbrix собран:
+
+```bash
+cd /home/tolisso/otterbrix
+
+# Если еще не собрано, выполнить сборку
+mkdir -p build && cd build
+
+# Установить зависимости (если еще не установлено)
+pip3 install conan==2.20.0 pytest cmake
+
+# Настроить Conan (если еще не настроено)
+conan profile detect --force
+conan remote add otterbrix http://conan.otterbrix.com
+
+# Скачать зависимости
+conan install ../conanfile.py --build missing -s build_type=Release -s compiler.cppstd=gnu17
+
+# Собрать
+cmake .. -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DDEV_MODE=ON
+cmake --build . --target all -- -j $(nproc)
+
+# Проверить что Python модуль доступен
+export PYTHONPATH=/home/tolisso/otterbrix/build/integration/python:$PYTHONPATH
+python3 -c "import otterbrix; print('✓ Otterbrix imported successfully')"
+```
+
+Затем создайте и запустите тестовый скрипт:
 
 ```bash
 cd /home/tolisso/otterbrix/for_ai/JSONBench
@@ -30,6 +60,13 @@ cd otterbrix
 # Создать простой тестовый скрипт
 cat > test_prototype.py << 'EOF'
 #!/usr/bin/env python3
+import sys
+import os
+
+# Настроить путь к локальной сборке Otterbrix
+OTTERBRIX_PYTHON_PATH = "/home/tolisso/otterbrix/build/integration/python"
+sys.path.insert(0, OTTERBRIX_PYTHON_PATH)
+
 from otterbrix import Client
 import json
 import gzip

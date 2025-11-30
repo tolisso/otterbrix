@@ -4,9 +4,15 @@
 
 ### 1. Установка и инициализация
 
+**Используется локальная сборка** из `/home/tolisso/otterbrix/build/integration/python/`
+
 ```python
-# Установка
-pip install otterbrix==1.0.1a9
+import sys
+import os
+
+# Добавить путь к локальной сборке
+OTTERBRIX_PYTHON_PATH = "/home/tolisso/otterbrix/build/integration/python"
+sys.path.insert(0, OTTERBRIX_PYTHON_PATH)
 
 # Инициализация
 from otterbrix import Client
@@ -14,6 +20,15 @@ from otterbrix import Client
 client = Client()
 # или с указанием пути
 client = Client("/path/to/data")
+```
+
+**Сборка Otterbrix** (если еще не собрано):
+```bash
+cd /home/tolisso/otterbrix
+mkdir -p build && cd build
+conan install ../conanfile.py --build missing -s build_type=Release -s compiler.cppstd=gnu17
+cmake .. -G Ninja -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release -DDEV_MODE=ON
+cmake --build . --target all -- -j $(nproc)
 ```
 
 ### 2. Создание базы данных и коллекции

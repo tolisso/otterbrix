@@ -5,6 +5,14 @@
 ### Базовый пример использования
 
 ```python
+import sys
+import os
+
+# Добавить путь к локальной сборке Otterbrix
+OTTERBRIX_PYTHON_PATH = "/home/tolisso/otterbrix/build/integration/python"
+if os.path.exists(OTTERBRIX_PYTHON_PATH):
+    sys.path.insert(0, OTTERBRIX_PYTHON_PATH)
+
 from otterbrix import Client
 
 # Создание клиента
@@ -20,6 +28,8 @@ for row in cursor:
 # Закрытие курсора
 cursor.close()
 ```
+
+**Важно**: Используется локальная сборка Otterbrix из `/home/tolisso/otterbrix/build/integration/python/`, а не установленная через pip.
 
 ### Классы и методы
 
@@ -492,6 +502,18 @@ if __name__ == "__main__":
 Скрипт для проверки возможностей Otterbrix API.
 Запустить перед началом интеграции.
 """
+
+import sys
+import os
+
+# Добавить путь к локальной сборке Otterbrix
+OTTERBRIX_PYTHON_PATH = "/home/tolisso/otterbrix/build/integration/python"
+if os.path.exists(OTTERBRIX_PYTHON_PATH):
+    sys.path.insert(0, OTTERBRIX_PYTHON_PATH)
+else:
+    print(f"Error: Otterbrix not found at {OTTERBRIX_PYTHON_PATH}")
+    print("Please build Otterbrix first")
+    sys.exit(1)
 
 from otterbrix import Client
 import json

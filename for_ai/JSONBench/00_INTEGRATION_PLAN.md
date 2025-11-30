@@ -45,6 +45,37 @@ JSONBench/
         └── <machine>_bluesky_1000m.json
 ```
 
+## Использование локального Otterbrix
+
+**Важно**: Для бенчмарка используется локальная сборка Otterbrix из репозитория `/home/tolisso/otterbrix/`, а не версия из PyPI. Это позволяет тестировать последние доработки и изменения.
+
+### Процесс сборки Otterbrix:
+
+```bash
+cd /home/tolisso/otterbrix
+
+# 1. Установка зависимостей (если еще не установлено)
+pip3 install conan==2.20.0 pytest cmake
+
+# 2. Настройка Conan
+conan profile detect --force
+conan remote add otterbrix http://conan.otterbrix.com
+
+# 3. Создание build директории и установка зависимостей
+mkdir -p build && cd build
+conan install ../conanfile.py --build missing -s build_type=Release -s compiler.cppstd=gnu17
+
+# 4. Сборка
+cmake .. -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DDEV_MODE=ON
+cmake --build . --target all -- -j $(nproc)
+
+# 5. Python модуль доступен в: build/integration/python/
+export PYTHONPATH=/home/tolisso/otterbrix/build/integration/python:$PYTHONPATH
+```
+
 ## Датасет
 
 - **Источник**: События Bluesky, собранные через Jetstream
@@ -83,20 +114,26 @@ JSONBench включает 5 аналитических запросов:
 
 ### Этап 1: Подготовка инфраструктуры (1-2 дня)
 
-1. **Создание директории `otterbrix/` в JSONBench**
+1. **Сборка локального Otterbrix**
+   - Собрать Otterbrix из исходников в `/home/tolisso/otterbrix/`
+   - Убедиться что Python модуль работает из `build/integration/python/`
+   - Протестировать базовые операции
+
+2. **Создание директории `otterbrix/` в JSONBench**
    - Скопировать структуру из существующего примера (например, duckdb)
    - Адаптировать под Otterbrix
 
-2. **Настройка окружения**
-   - Определить способ установки Otterbrix (pip install, docker, сборка из исходников)
-   - Подготовить скрипт установки
+3. **Настройка окружения**
+   - Использовать локальную сборку через PYTHONPATH
+   - Подготовить скрипт установки (без pip install)
 
 ### Этап 2: Реализация скриптов (3-5 дней)
 
 #### 2.1. install.sh и uninstall.sh
-- Установка Python-пакета otterbrix
-- Установка зависимостей
-- Проверка успешности установки
+- Проверка наличия собранного Otterbrix
+- Настройка PYTHONPATH для использования локальной сборки
+- Установка дополнительных зависимостей (если нужно)
+- Проверка успешности импорта
 
 #### 2.2. ddl.sql
 - Создание базы данных

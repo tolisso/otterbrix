@@ -29,6 +29,14 @@
 - Примеры кода для загрузки и запросов
 - Скрипты для тестирования API
 
+### [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) ⚙️
+**Инструкции по сборке локального Otterbrix**
+- Пошаговая инструкция по сборке из исходников
+- Настройка Conan и CMake
+- Использование локальной сборки в скриптах
+- Решение типичных проблем при сборке
+- Оптимизации для бенчмарка
+
 ### [03_IMPLEMENTATION_GUIDE.md](./03_IMPLEMENTATION_GUIDE.md)
 **Пошаговое руководство по реализации**
 - Создание структуры директории
@@ -50,12 +58,22 @@
 ### 1. Понимание задачи
 Прочитайте **00_INTEGRATION_PLAN.md** для общего понимания.
 
-### 2. Проверка требований
+### 2. Сборка локального Otterbrix
+Убедитесь что Otterbrix собран из исходников:
+```bash
+cd /home/tolisso/otterbrix
+mkdir -p build && cd build
+# Следуйте инструкциям по сборке из BUILD_INSTRUCTIONS.md
+```
+**См. детальные инструкции:** [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md)
+
+### 3. Проверка требований
 Изучите **01_TECHNICAL_REQUIREMENTS.md** и убедитесь, что Otterbrix поддерживает необходимую функциональность.
 
-### 3. Тестирование API
+### 4. Тестирование API
 Запустите тестовый скрипт из **02_OTTERBRIX_API_REFERENCE.md**:
 ```bash
+export PYTHONPATH=/home/tolisso/otterbrix/build/integration/python:$PYTHONPATH
 python3 test_syntax.py
 ```
 
@@ -91,7 +109,8 @@ cat _m6i.8xlarge_bluesky_1m.results_runtime
 - [ ] Прочитаны все документы
 - [ ] Понятна структура JSONBench
 - [ ] Понятны требования к API
-- [ ] Протестирован Python API Otterbrix
+- [ ] Локальный Otterbrix собран из исходников
+- [ ] Протестирован Python API Otterbrix (с правильным PYTHONPATH)
 
 ### Реализация
 - [ ] Создана директория `JSONBench/otterbrix/`

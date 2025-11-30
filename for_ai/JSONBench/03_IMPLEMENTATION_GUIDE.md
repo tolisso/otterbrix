@@ -37,7 +37,11 @@ cp ../duckdb/*.sql .
 #!/bin/bash
 # otterbrix/install.sh
 
-echo "Installing Otterbrix..."
+echo "Setting up Otterbrix from local build..."
+
+# Путь к локальной сборке Otterbrix
+OTTERBRIX_ROOT="/home/tolisso/otterbrix"
+OTTERBRIX_PYTHON_PATH="$OTTERBRIX_ROOT/build/integration/python"
 
 # Проверка Python
 if ! command -v python3 &> /dev/null; then
@@ -45,21 +49,27 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# Проверка pip
-if ! command -v pip3 &> /dev/null; then
-    echo "Error: pip3 is required"
+# Проверка наличия собранного Otterbrix
+if [[ ! -d "$OTTERBRIX_PYTHON_PATH" ]]; then
+    echo "Error: Otterbrix Python module not found at $OTTERBRIX_PYTHON_PATH"
+    echo "Please build Otterbrix first:"
+    echo "  cd $OTTERBRIX_ROOT"
+    echo "  mkdir -p build && cd build"
+    echo "  conan install ../conanfile.py --build missing -s build_type=Release -s compiler.cppstd=gnu17"
+    echo "  cmake .. -G Ninja -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release -DDEV_MODE=ON"
+    echo "  cmake --build . --target all -- -j \$(nproc)"
     exit 1
 fi
 
-# Установка Otterbrix
-pip3 install --user "otterbrix==1.0.1a9"
+# Настройка PYTHONPATH
+export PYTHONPATH="$OTTERBRIX_PYTHON_PATH:$PYTHONPATH"
 
 # Проверка установки
-if python3 -c "import otterbrix" 2>/dev/null; then
-    echo "✓ Otterbrix installed successfully"
-    python3 -c "import otterbrix; print(f'Version: {otterbrix.__version__}')" 2>/dev/null || echo "Version: 1.0.1a9"
+if python3 -c "import sys; sys.path.insert(0, '$OTTERBRIX_PYTHON_PATH'); import otterbrix" 2>/dev/null; then
+    echo "✓ Otterbrix found and can be imported"
+    python3 -c "import sys; sys.path.insert(0, '$OTTERBRIX_PYTHON_PATH'); import otterbrix; print(f'Build path: $OTTERBRIX_PYTHON_PATH')"
 else
-    echo "✗ Otterbrix installation failed"
+    echo "✗ Failed to import Otterbrix from local build"
     exit 1
 fi
 
@@ -70,6 +80,13 @@ cat > otterbrix_helper.py << 'PYTHON_SCRIPT'
 Вспомогательный модуль для работы с Otterbrix через shell-скрипты.
 """
 import sys
+import os
+
+# Добавить путь к локальной сборке Otterbrix
+OTTERBRIX_PYTHON_PATH = "/home/tolisso/otterbrix/build/integration/python"
+if os.path.exists(OTTERBRIX_PYTHON_PATH):
+    sys.path.insert(0, OTTERBRIX_PYTHON_PATH)
+
 import json
 import time
 from otterbrix import Client
@@ -140,18 +157,17 @@ echo "Installation completed"
 #!/bin/bash
 # otterbrix/uninstall.sh
 
-echo "Uninstalling Otterbrix..."
-
-# Удалить пакет
-pip3 uninstall -y otterbrix
+echo "Cleaning up Otterbrix benchmark files..."
 
 # Удалить вспомогательные файлы
 rm -f otterbrix_helper.py
 
-# Удалить директорию с данными (опционально)
+# Удалить временные базы данных (опционально)
 # rm -rf ~/.otterbrix
+# rm -rf ./otterbrix_*
 
-echo "Uninstallation completed"
+echo "Cleanup completed"
+echo "Note: Local Otterbrix build at /home/tolisso/otterbrix/ was not modified"
 ```
 
 ### Шаг 5: Создать ddl.sql
@@ -279,6 +295,13 @@ echo "Loading data into Otterbrix..."
 cat > load_otterbrix.py << 'PYTHON_LOADER'
 #!/usr/bin/env python3
 import sys
+import os
+
+# Добавить путь к локальной сборке Otterbrix
+OTTERBRIX_PYTHON_PATH = "/home/tolisso/otterbrix/build/integration/python"
+if os.path.exists(OTTERBRIX_PYTHON_PATH):
+    sys.path.insert(0, OTTERBRIX_PYTHON_PATH)
+
 import gzip
 import json
 import glob
@@ -415,6 +438,13 @@ echo "Running queries on database: $DB_NAME"
 cat > run_otterbrix_queries.py << 'PYTHON_RUNNER'
 #!/usr/bin/env python3
 import sys
+import os
+
+# Добавить путь к локальной сборке Otterbrix
+OTTERBRIX_PYTHON_PATH = "/home/tolisso/otterbrix/build/integration/python"
+if os.path.exists(OTTERBRIX_PYTHON_PATH):
+    sys.path.insert(0, OTTERBRIX_PYTHON_PATH)
+
 import time
 from otterbrix import Client
 
@@ -508,7 +538,11 @@ fi
 DB_NAME="$1"
 TABLE_NAME="$2"
 
+OTTERBRIX_PYTHON_PATH="/home/tolisso/otterbrix/build/integration/python"
+
 python3 -c "
+import sys
+sys.path.insert(0, '$OTTERBRIX_PYTHON_PATH')
 from otterbrix import Client
 client = Client()
 client.execute('USE $DB_NAME')
@@ -536,7 +570,11 @@ TABLE_NAME="$2"
 # TODO: Реализовать получение размера БД
 # Нужно выяснить как Otterbrix предоставляет эту информацию
 
+OTTERBRIX_PYTHON_PATH="/home/tolisso/otterbrix/build/integration/python"
+
 python3 -c "
+import sys
+sys.path.insert(0, '$OTTERBRIX_PYTHON_PATH')
 from otterbrix import Client
 import os
 
@@ -570,7 +608,11 @@ fi
 
 DB_NAME="$1"
 
+OTTERBRIX_PYTHON_PATH="/home/tolisso/otterbrix/build/integration/python"
+
 python3 -c "
+import sys
+sys.path.insert(0, '$OTTERBRIX_PYTHON_PATH')
 from otterbrix import Client
 client = Client()
 client.execute('DROP DATABASE IF EXISTS $DB_NAME')

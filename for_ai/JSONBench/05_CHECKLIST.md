@@ -15,9 +15,14 @@
 
 ### Проверка окружения
 - [ ] Python 3.7+ установлен
-- [ ] pip3 работает
-- [ ] Otterbrix установлен (`pip install otterbrix`)
-- [ ] Otterbrix импортируется (`python3 -c "import otterbrix"`)
+- [ ] Conan, CMake, Ninja установлены
+- [ ] Otterbrix собран из исходников в `/home/tolisso/otterbrix/build/`
+- [ ] Python модуль находится в `/home/tolisso/otterbrix/build/integration/python/`
+- [ ] Otterbrix импортируется с правильным PYTHONPATH
+  ```bash
+  export PYTHONPATH=/home/tolisso/otterbrix/build/integration/python:$PYTHONPATH
+  python3 -c "import otterbrix; print('OK')"
+  ```
 - [ ] JSONBench склонирован
 - [ ] Тестовые данные скачаны (хотя бы 1M)
 
@@ -26,6 +31,8 @@
 ### Базовая функциональность
 - [ ] Создание клиента работает
 ```python
+import sys
+sys.path.insert(0, "/home/tolisso/otterbrix/build/integration/python")
 from otterbrix import Client
 client = Client()
 ```
