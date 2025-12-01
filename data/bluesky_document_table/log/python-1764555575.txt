@@ -1,0 +1,75 @@
+[2025-12-01 05:19:35.920] [__default__] [trace] [pid 7778 tid 7778] spaces::spaces()
+[2025-12-01 05:19:35.920] [__default__] [trace] [pid 7778 tid 7778] spaces::manager_wal start
+[2025-12-01 05:19:35.920] [__default__] [trace] [pid 7778 tid 7778] manager_wal_replicate_t start thread pool
+[2025-12-01 05:19:35.920] [__default__] [trace] [pid 7778 tid 7778] spaces::manager_wal finish
+[2025-12-01 05:19:35.920] [__default__] [trace] [pid 7778 tid 7778] spaces::manager_disk start
+[2025-12-01 05:19:35.920] [__default__] [trace] [pid 7778 tid 7778] manager_disk start
+[2025-12-01 05:19:35.920] [__default__] [trace] [pid 7778 tid 7778] manager_disk finish
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] spaces::manager_disk finish
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] spaces::memory_storage start
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] memory_storage start thread pool
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] spaces::memory_storage finish
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] spaces::manager_dispatcher start
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] manager_dispatcher_t::manager_dispatcher_t 
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] spaces::manager_dispatcher finish
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] spaces::manager_dispatcher create dispatcher
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] manager_wal_replicate_t::create_wal_worker
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] manager_disk create_agent : agent_disk_1
+[2025-12-01 05:19:35.921] [__default__] [trace] [pid 7778 tid 7778] agent_disk::create
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7778] manager_dispatcher_t::create session: 3529111150 
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7778] dispatcher_t::dispatcher_t start name:dispatcher_t
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7778] spaces::spaces() final
+[2025-12-01 05:19:35.922] [__default__] [debug] [pid 7778 tid 7778] wrapper_client::wrapper_client()
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7778] wrapper_dispatcher_t::load session: 7058222300
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7778] manager_dispatcher_t::load session: 7058222300
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::load, session: 7058222300
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7781] manager_disk_t::load , session : 7058222300
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7782] agent_disk::load , session : 7058222300
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::load_from_disk_result, session: 7058222300, wal_id: 0
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7781] wrapper_dispatcher_t::enqueue_base msg type: 1152921504606846978
+[2025-12-01 05:19:35.922] [__default__] [trace] [pid 7778 tid 7781] wrapper_dispatcher_t::load_finish
+[2025-12-01 05:19:35.923] [__default__] [debug] [pid 7778 tid 7778] wrapper_client::get_or_create name database: bluesky_document_table
+[2025-12-01 05:19:35.923] [__default__] [trace] [pid 7778 tid 7778] wrapper_dispatcher_t::send_plan session: 8822777875, $create_database: bluesky_document_table 
+[2025-12-01 05:19:35.923] [__default__] [trace] [pid 7778 tid 7778] manager_dispatcher_t::execute_plan session: 8822777875, $create_database: bluesky_document_table
+[2025-12-01 05:19:35.923] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::execute_plan: session 8822777875, $create_database: bluesky_document_table
+[2025-12-01 05:19:35.923] [__default__] [trace] [pid 7778 tid 7781] memory_storage_t:create_database bluesky_document_table
+[2025-12-01 05:19:35.923] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::execute_plan_finish: session 8822777875, $create_database: bluesky_document_table, true
+[2025-12-01 05:19:35.923] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::execute_plan_finish: create_database_t
+[2025-12-01 05:19:35.923] [__default__] [trace] [pid 7778 tid 7781] manager_disk_t::append_database , session : 8822777875 , database : bluesky_document_table
+[2025-12-01 05:19:35.923] [__default__] [trace] [pid 7778 tid 7781] manager_wal_replicate_t::create_database bluesky_document_table
+[2025-12-01 05:19:35.923] [__default__] [trace] [pid 7778 tid 7782] wal_replicate_t::create_database bluesky_document_table, session: 8822777875
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7782] wal_replicate_t::send_success session 8822777875
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::wal_success session : 8822777875, wal id: 1
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7781] manager_disk_t::flush , session : 8822777875 , wal_id : 1
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::wal_success remove session : 8822777875, wal id: 1
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7782] agent_disk::append_database , database : bluesky_document_table
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7781] wrapper_dispatcher_t::enqueue_base msg type: 1152921504606847078
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7782] agent_disk::fix_wal_id : 1
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7781] wrapper_dispatcher_t::execute_plan_finish session: 8822777875 true
+[2025-12-01 05:19:35.924] [__default__] [debug] [pid 7778 tid 7778] wrapper_database
+[2025-12-01 05:19:35.924] [__default__] [debug] [pid 7778 tid 7778] wrapper_client::get_or_create return wrapper_database_ptr
+[2025-12-01 05:19:35.924] [__default__] [debug] [pid 7778 tid 7778] wrapper_database::create name collection: bluesky
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7778] wrapper_dispatcher_t::send_plan session: 10587333450, $create_collection: bluesky_document_table.bluesky 
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7778] manager_dispatcher_t::execute_plan session: 10587333450, $create_collection: bluesky_document_table.bluesky
+[2025-12-01 05:19:35.924] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::execute_plan: session 10587333450, $create_collection: bluesky_document_table.bluesky
+[2025-12-01 05:19:35.925] [__default__] [trace] [pid 7778 tid 7781] memory_storage_t:create_collection bluesky_document_table.bluesky
+[2025-12-01 05:19:35.925] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::execute_plan_finish: session 10587333450, $create_collection: bluesky_document_table.bluesky, true
+[2025-12-01 05:19:35.925] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::execute_plan_finish: create_collection_t
+[2025-12-01 05:19:35.925] [__default__] [trace] [pid 7778 tid 7781] manager_disk_t::append_collection , session : 10587333450 , database : bluesky_document_table , collection : bluesky
+[2025-12-01 05:19:35.925] [__default__] [trace] [pid 7778 tid 7781] manager_wal_replicate_t::create_collection bluesky_document_table::bluesky
+[2025-12-01 05:19:35.925] [__default__] [trace] [pid 7778 tid 7782] wal_replicate_t::create_collection bluesky_document_table::bluesky, session: 10587333450
+[2025-12-01 05:19:35.925] [__default__] [trace] [pid 7778 tid 7782] wal_replicate_t::send_success session 10587333450
+[2025-12-01 05:19:35.925] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::wal_success session : 10587333450, wal id: 2
+[2025-12-01 05:19:35.926] [__default__] [trace] [pid 7778 tid 7781] manager_disk_t::flush , session : 10587333450 , wal_id : 2
+[2025-12-01 05:19:35.926] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::wal_success remove session : 10587333450, wal id: 2
+[2025-12-01 05:19:35.926] [__default__] [trace] [pid 7778 tid 7781] wrapper_dispatcher_t::enqueue_base msg type: 1152921504606847078
+[2025-12-01 05:19:35.926] [__default__] [trace] [pid 7778 tid 7781] wrapper_dispatcher_t::execute_plan_finish session: 10587333450 true
+[2025-12-01 05:19:35.926] [__default__] [trace] [pid 7778 tid 7782] agent_disk::append_collection , database : bluesky_document_table , collection : bluesky
+[2025-12-01 05:19:35.926] [__default__] [trace] [pid 7778 tid 7778] wrapper_collection
+[2025-12-01 05:19:35.926] [__default__] [debug] [pid 7778 tid 7778] wrapper_client::get_or_create return wrapper_database_ptr
+[2025-12-01 05:19:35.926] [__default__] [trace] [pid 7778 tid 7782] agent_disk::fix_wal_id : 2
+[2025-12-01 05:19:35.928] [__default__] [trace] [pid 7778 tid 7778] wrapper_collection::insert_many
+[2025-12-01 05:19:35.936] [__default__] [trace] [pid 7778 tid 7778] wrapper_dispatcher_t::insert_many session: 12351889025, collection name: bluesky 
+[2025-12-01 05:19:35.936] [__default__] [trace] [pid 7778 tid 7778] manager_dispatcher_t::execute_plan session: 12351889025, $insert: {$raw_data: {$rows: 100}}
+[2025-12-01 05:19:35.936] [__default__] [trace] [pid 7778 tid 7781] dispatcher_t::execute_plan: session 12351889025, $insert: {$raw_data: {$rows: 100}}
+[2025-12-01 05:19:35.937] [__default__] [trace] [pid 7778 tid 7781] memory_storage_t:execute_plan_impl: collection: bluesky_document_table.bluesky, sesion: 12351889025

@@ -1,0 +1,31 @@
+[2025-12-01 05:04:48.358] [__default__] [trace] [pid 5843 tid 5843] spaces::spaces()
+[2025-12-01 05:04:48.358] [__default__] [trace] [pid 5843 tid 5843] spaces::manager_wal start
+[2025-12-01 05:04:48.358] [__default__] [trace] [pid 5843 tid 5843] manager_wal_replicate_t start thread pool
+[2025-12-01 05:04:48.358] [__default__] [trace] [pid 5843 tid 5843] spaces::manager_wal finish
+[2025-12-01 05:04:48.358] [__default__] [trace] [pid 5843 tid 5843] spaces::manager_disk start
+[2025-12-01 05:04:48.359] [__default__] [trace] [pid 5843 tid 5843] manager_disk start
+[2025-12-01 05:04:48.359] [__default__] [trace] [pid 5843 tid 5843] manager_disk finish
+[2025-12-01 05:04:48.360] [__default__] [trace] [pid 5843 tid 5843] spaces::manager_disk finish
+[2025-12-01 05:04:48.360] [__default__] [trace] [pid 5843 tid 5843] spaces::memory_storage start
+[2025-12-01 05:04:48.360] [__default__] [trace] [pid 5843 tid 5843] memory_storage start thread pool
+[2025-12-01 05:04:48.360] [__default__] [trace] [pid 5843 tid 5843] spaces::memory_storage finish
+[2025-12-01 05:04:48.360] [__default__] [trace] [pid 5843 tid 5843] spaces::manager_dispatcher start
+[2025-12-01 05:04:48.360] [__default__] [trace] [pid 5843 tid 5843] manager_dispatcher_t::manager_dispatcher_t 
+[2025-12-01 05:04:48.360] [__default__] [trace] [pid 5843 tid 5843] spaces::manager_dispatcher finish
+[2025-12-01 05:04:48.360] [__default__] [trace] [pid 5843 tid 5843] spaces::manager_dispatcher create dispatcher
+[2025-12-01 05:04:48.360] [__default__] [trace] [pid 5843 tid 5843] manager_wal_replicate_t::create_wal_worker
+[2025-12-01 05:04:48.361] [__default__] [trace] [pid 5843 tid 5843] manager_disk create_agent : agent_disk_1
+[2025-12-01 05:04:48.362] [__default__] [trace] [pid 5843 tid 5843] agent_disk::create
+[2025-12-01 05:04:48.362] [__default__] [trace] [pid 5843 tid 5843] manager_dispatcher_t::create session: 3529109376 
+[2025-12-01 05:04:48.362] [__default__] [trace] [pid 5843 tid 5843] dispatcher_t::dispatcher_t start name:dispatcher_t
+[2025-12-01 05:04:48.363] [__default__] [trace] [pid 5843 tid 5843] spaces::spaces() final
+[2025-12-01 05:04:48.363] [__default__] [debug] [pid 5843 tid 5843] wrapper_client::wrapper_client()
+[2025-12-01 05:04:48.363] [__default__] [trace] [pid 5843 tid 5843] wrapper_dispatcher_t::load session: 7058218752
+[2025-12-01 05:04:48.363] [__default__] [trace] [pid 5843 tid 5843] manager_dispatcher_t::load session: 7058218752
+[2025-12-01 05:04:48.363] [__default__] [trace] [pid 5843 tid 5845] dispatcher_t::load, session: 7058218752
+[2025-12-01 05:04:48.364] [__default__] [trace] [pid 5843 tid 5845] manager_disk_t::load , session : 7058218752
+[2025-12-01 05:04:48.364] [__default__] [trace] [pid 5843 tid 5846] agent_disk::load , session : 7058218752
+[2025-12-01 05:04:48.364] [__default__] [trace] [pid 5843 tid 5845] dispatcher_t::load_from_disk_result, session: 7058218752, wal_id: 0
+[2025-12-01 05:04:48.364] [__default__] [trace] [pid 5843 tid 5845] wrapper_dispatcher_t::enqueue_base msg type: 1152921504606846978
+[2025-12-01 05:04:48.364] [__default__] [trace] [pid 5843 tid 5845] wrapper_dispatcher_t::load_finish
+[2025-12-01 05:04:48.365] [__default__] [debug] [pid 5843 tid 5843] wrapper_client::execute

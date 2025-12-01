@@ -1,0 +1,31 @@
+[2025-12-01 05:21:12.733] [__default__] [trace] [pid 7910 tid 7910] spaces::spaces()
+[2025-12-01 05:21:12.733] [__default__] [trace] [pid 7910 tid 7910] spaces::manager_wal start
+[2025-12-01 05:21:12.733] [__default__] [trace] [pid 7910 tid 7910] manager_wal_replicate_t start thread pool
+[2025-12-01 05:21:12.733] [__default__] [trace] [pid 7910 tid 7910] spaces::manager_wal finish
+[2025-12-01 05:21:12.733] [__default__] [trace] [pid 7910 tid 7910] spaces::manager_disk start
+[2025-12-01 05:21:12.733] [__default__] [trace] [pid 7910 tid 7910] manager_disk start
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] manager_disk finish
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] spaces::manager_disk finish
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] spaces::memory_storage start
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] memory_storage start thread pool
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] spaces::memory_storage finish
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] spaces::manager_dispatcher start
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] manager_dispatcher_t::manager_dispatcher_t 
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] spaces::manager_dispatcher finish
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] spaces::manager_dispatcher create dispatcher
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] manager_wal_replicate_t::create_wal_worker
+[2025-12-01 05:21:12.734] [__default__] [trace] [pid 7910 tid 7910] manager_disk create_agent : agent_disk_1
+[2025-12-01 05:21:12.735] [__default__] [trace] [pid 7910 tid 7910] agent_disk::create
+[2025-12-01 05:21:12.735] [__default__] [trace] [pid 7910 tid 7910] manager_dispatcher_t::create session: 3529111344 
+[2025-12-01 05:21:12.735] [__default__] [trace] [pid 7910 tid 7910] dispatcher_t::dispatcher_t start name:dispatcher_t
+[2025-12-01 05:21:12.735] [__default__] [trace] [pid 7910 tid 7910] spaces::spaces() final
+[2025-12-01 05:21:12.735] [__default__] [debug] [pid 7910 tid 7910] wrapper_client::wrapper_client()
+[2025-12-01 05:21:12.735] [__default__] [trace] [pid 7910 tid 7910] wrapper_dispatcher_t::load session: 7058222688
+[2025-12-01 05:21:12.735] [__default__] [trace] [pid 7910 tid 7910] manager_dispatcher_t::load session: 7058222688
+[2025-12-01 05:21:12.736] [__default__] [trace] [pid 7910 tid 7912] dispatcher_t::load, session: 7058222688
+[2025-12-01 05:21:12.736] [__default__] [trace] [pid 7910 tid 7912] manager_disk_t::load , session : 7058222688
+[2025-12-01 05:21:12.736] [__default__] [trace] [pid 7910 tid 7913] agent_disk::load , session : 7058222688
+[2025-12-01 05:21:12.736] [__default__] [trace] [pid 7910 tid 7912] dispatcher_t::load_from_disk_result, session: 7058222688, wal_id: 0
+[2025-12-01 05:21:12.736] [__default__] [trace] [pid 7910 tid 7912] wrapper_dispatcher_t::enqueue_base msg type: 1152921504606846978
+[2025-12-01 05:21:12.736] [__default__] [trace] [pid 7910 tid 7912] wrapper_dispatcher_t::load_finish
+[2025-12-01 05:21:12.737] [__default__] [debug] [pid 7910 tid 7910] wrapper_client::execute
