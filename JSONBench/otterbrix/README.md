@@ -43,19 +43,58 @@ Otterbrix integration using **document_table** storage for Bluesky JSON data ana
 
 ## Quick Start
 
+### Simple Benchmark (Recommended)
+
 ```bash
 # 1. Verify installation
 ./install.sh
 
-# 2. Create table and load data (1 million records)
-./create_and_load.sh bluesky.db bluesky ddl.sql ../file_0001.json 1 success.log error.log
+# 2. Run benchmark with storage type selection
 
-# 3. Check count
-./count.sh bluesky.db bluesky
+# Option A: document_table (columnar, fast analytics) - RECOMMENDED
+./benchmark.sh document_table
 
-# 4. Run queries
-./run_queries.sh bluesky.db
+# Option B: document (B-tree, flexible OLTP)
+./benchmark.sh document
+
+# With custom dataset:
+./benchmark.sh document_table test_sample.json        # 100 records
+./benchmark.sh document_table test_sample_1000.json   # 1K records (default)
+./benchmark.sh document_table file_0001.json          # 1M records (full)
 ```
+
+### Manual Usage
+
+```bash
+# Create table and load data with STORAGE TYPE selection
+./create_and_load.sh <DB_NAME> <TABLE_NAME> <STORAGE_TYPE> <DDL_FILE> <DATA_DIR> <NUM_FILES> <SUCCESS_LOG> <ERROR_LOG>
+
+# Examples:
+./create_and_load.sh bluesky_dt bluesky document_table ddl.sql ../test_sample_1000.json 1 success.log error.log
+./create_and_load.sh bluesky_doc bluesky document ddl.sql ../test_sample_1000.json 1 success.log error.log
+
+# Check count
+./count.sh bluesky_dt bluesky
+
+# Run queries (document_table only for now)
+./run_queries.sh bluesky_dt
+```
+
+### Storage Types
+
+**document_table** (Recommended for JSONBench):
+- ✅ Columnar storage with automatic JSON path extraction
+- ✅ Fast analytical queries (aggregations, filters)
+- ✅ Automatic schema evolution
+- ✅ Union types support
+- ⚠️ SQL INSERT (slower for bulk loads)
+
+**document** (Alternative):
+- ✅ B-tree storage (traditional document database)
+- ✅ Fast inserts (Document API)
+- ✅ Flexible schema
+- ⚠️ Slower analytical queries
+- ⚠️ No automatic columnar optimization
 
 ## Document Table Concept
 
