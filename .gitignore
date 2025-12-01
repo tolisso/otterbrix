@@ -426,8 +426,9 @@ build
 *.txt.user
 
 # Otterbrix data directory (embedded mode databases)
-# data/
+data/
 
 # JSONBench temporary files
 JSONBench/*.log
 JSONBench/otterbrix/*.log
+JSONBench/file_0001.json
