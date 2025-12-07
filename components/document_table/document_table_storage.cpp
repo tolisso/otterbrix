@@ -297,9 +297,79 @@ namespace components::document_table {
 
     document::document_ptr document_table_storage_t::row_to_document(const vector::data_chunk_t& row,
                                                                       size_t row_idx) {
-        // TODO: реализовать конвертацию row -> document
-        // Это более сложная операция, требует создания JSON документа из значений
-        return nullptr;
+        if (row_idx >= row.size()) {
+            return nullptr;
+        }
+        
+        auto doc = document::make_document(resource_);
+        const auto& columns = schema_->columns();
+        
+        // Итерируем по всем колонкам и восстанавливаем значения
+        for (size_t col_idx = 0; col_idx < columns.size() && col_idx < row.column_count(); ++col_idx) {
+            const auto& col_info = columns[col_idx];
+            
+            // Получаем значение из chunk
+            auto value = row.value(col_idx, row_idx);
+            
+            // Пропускаем NULL значения
+            if (value.is_null()) {
+                continue;
+            }
+            
+            // Устанавливаем значение в документ по JSON path
+            const std::string& path = col_info.json_path;
+            
+            // Добавляем "/" в начало если нужно
+            std::string doc_path = path;
+            if (!doc_path.empty() && doc_path[0] != '/') {
+                doc_path = "/" + doc_path;
+            }
+            
+            // Устанавливаем значение в зависимости от типа
+            switch (value.type().type()) {
+            case types::logical_type::BOOLEAN:
+                doc->set(doc_path, value.value<bool>());
+                break;
+            case types::logical_type::TINYINT:
+                doc->set(doc_path, value.value<int8_t>());
+                break;
+            case types::logical_type::SMALLINT:
+                doc->set(doc_path, value.value<int16_t>());
+                break;
+            case types::logical_type::INTEGER:
+                doc->set(doc_path, value.value<int32_t>());
+                break;
+            case types::logical_type::BIGINT:
+                doc->set(doc_path, value.value<int64_t>());
+                break;
+            case types::logical_type::UTINYINT:
+                doc->set(doc_path, value.value<uint8_t>());
+                break;
+            case types::logical_type::USMALLINT:
+                doc->set(doc_path, value.value<uint16_t>());
+                break;
+            case types::logical_type::UINTEGER:
+                doc->set(doc_path, value.value<uint32_t>());
+                break;
+            case types::logical_type::UBIGINT:
+                doc->set(doc_path, value.value<uint64_t>());
+                break;
+            case types::logical_type::FLOAT:
+                doc->set(doc_path, value.value<float>());
+                break;
+            case types::logical_type::DOUBLE:
+                doc->set(doc_path, value.value<double>());
+                break;
+            case types::logical_type::STRING_LITERAL:
+                doc->set(doc_path, std::string(value.value<std::string_view>()));
+                break;
+            default:
+                // Неподдерживаемый тип, пропускаем
+                break;
+            }
+        }
+        
+        return doc;
     }
 
     types::logical_type document_table_storage_t::detect_value_type_in_document(const document::document_ptr& doc,
