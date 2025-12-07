@@ -12,6 +12,7 @@ set( ${PROJECT_NAME}_SOURCES
         test_index.cpp
         test_join.cpp
         test_connections.cpp
+        test_jsonbench.cpp
 )
 
 add_executable(${PROJECT_NAME} main.cpp ${${PROJECT_NAME}_SOURCES})
