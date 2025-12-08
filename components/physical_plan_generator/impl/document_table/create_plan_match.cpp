@@ -1,5 +1,6 @@
 #include "../create_plan_match.hpp"
 #include <components/physical_plan/document_table/operators/scan/full_scan.hpp>
+#include <components/physical_plan/document_table/operators/scan/primary_key_scan.hpp>
 #include <components/physical_plan/table/operators/operator_match.hpp>
 #include <services/collection/collection.hpp>
 
@@ -18,21 +19,24 @@ namespace services::document_table::planner::impl {
     //            compare == compare_type::gte || compare == compare_type::lte;
     // }
 
-    // TODO: Добавить поддержку быстрого поиска по _id
-    // bool is_can_primary_key_find_by_predicate(components::expressions::compare_type compare) {
-    //     using components::expressions::compare_type;
-    //     return compare == compare_type::eq;
-    // }
+    // Поддержка быстрого поиска по _id
+    bool is_can_primary_key_find_by_predicate(components::expressions::compare_type compare) {
+        using components::expressions::compare_type;
+        return compare == compare_type::eq;
+    }
 
     components::base::operators::operator_ptr
     create_plan_match_(collection::context_collection_t* context_,
                        const components::expressions::compare_expression_ptr& expr,
                        components::logical_plan::limit_t limit) {
-        // TODO: Реализовать primary_key_scan для быстрого findOne по _id
-        // if (is_can_primary_key_find_by_predicate(expr->type()) && expr->key().as_string() == "_id") {
-        //     return boost::intrusive_ptr(
-        //         new components::document_table::operators::primary_key_scan(context_));
-        // }
+        // Реализация primary_key_scan для быстрого findOne по _id
+        if (expr && is_can_primary_key_find_by_predicate(expr->type()) && 
+            expr->key_left().as_string() == "_id") {
+            // Создаем primary_key_scan оператор с expression
+            // Значение _id будет извлечено из expression во время выполнения
+            return boost::intrusive_ptr(
+                new components::document_table::operators::primary_key_scan(context_, expr));
+        }
 
         // TODO: Реализовать index_scan для быстрого поиска по индексированным полям
         // if (context_) {
@@ -43,8 +47,7 @@ namespace services::document_table::planner::impl {
         //     }
         // }
 
-        // Для document_table всегда используем full_scan
-        // Пока индексы не поддерживаются - все запросы делают полное сканирование (O(N))
+        // Для document_table используем full_scan как fallback
         if (is_document_table_storage(context_)) {
             return boost::intrusive_ptr(
                 new components::document_table::operators::full_scan(context_, expr, limit));

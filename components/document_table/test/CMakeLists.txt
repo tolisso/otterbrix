@@ -5,6 +5,7 @@ set(${PROJECT_NAME}_SOURCES
         test_comprehensive.cpp
         test_union_types.cpp
         test_union_integration.cpp
+        test_primary_key_scan.cpp
         )
 
 add_executable(otterbrix_${PROJECT_NAME}

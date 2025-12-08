@@ -8,6 +8,7 @@ set( ${PROJECT_NAME}_SOURCES
         test_collection_logical_plan.cpp
         test_collection_sql.cpp
         test_document_table_sql.cpp
+        test_document_table_primary_key.cpp
         test_save_load.cpp
         test_index.cpp
         test_join.cpp
