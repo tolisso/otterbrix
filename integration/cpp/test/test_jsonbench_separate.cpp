@@ -42,6 +42,19 @@ struct BenchmarkResult {
     std::string storage_type;
 };
 
+// Query pair for different storage types
+struct QueryPair {
+    std::string document_table_query;  // Uses "field.subfield" syntax
+    std::string document_query;        // Uses /field/subfield syntax
+    
+    QueryPair(const std::string& dt_query, const std::string& doc_query)
+        : document_table_query(dt_query), document_query(doc_query) {}
+    
+    // Constructor for queries that work the same for both storages
+    explicit QueryPair(const std::string& query)
+        : document_table_query(query), document_query(query) {}
+};
+
 // Setup and populate document_table storage
 std::unique_ptr<test_spaces> setup_document_table(const std::string& tmp_dir, 
                                                     const std::vector<std::string>& json_lines) {
@@ -299,18 +312,23 @@ TEST_CASE("JSONBench 1: Count by collection (GROUP BY)", "[jsonbench][q1]") {
     
     print_header("JSONBench Q1: Count events by collection (GROUP BY)", "", json_lines.size());
 
-    const std::string query = "SELECT \"commit.collection\" AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;";
+    QueryPair queries(
+        // document_table: column name with dot
+        "SELECT \"commit.collection\" AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;",
+        // document: JSON pointer path
+        "SELECT \"/commit/collection\" AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;"
+    );
 
     // Test 1: document_table
     std::cout << "[1/2] Testing document_table Q1..." << std::endl;
     auto dt_space = setup_document_table("/tmp/bench_q1_dt", json_lines);
-    auto dt_result = run_query(dt_space, query, "document_table");
+    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
     std::cout << "  ✓ document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
 
     // Test 2: document (B-tree)
     std::cout << "[2/2] Testing document Q1..." << std::endl;
     auto doc_space = setup_document("/tmp/bench_q1_doc", json_lines);
-    auto doc_result = run_query(doc_space, query, "document");
+    auto doc_result = run_query(doc_space, queries.document_query, "document");
     std::cout << "  ✓ document:       " << doc_result.time_ms << "ms (" << doc_result.count << " groups)" << std::endl;
 
     // Summary
@@ -324,20 +342,27 @@ TEST_CASE("JSONBench 2: Count with DISTINCT (GROUP BY + WHERE)", "[jsonbench][q2
     
     print_header("JSONBench Q2: Count events + unique users (GROUP + WHERE)", "", json_lines.size());
 
-    const std::string query = "SELECT \"commit.collection\" AS event, COUNT(*) AS count, COUNT(DISTINCT did) AS users "
-                              "FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"commit.operation\" = 'create' "
-                              "GROUP BY event ORDER BY count DESC;";
+    QueryPair queries(
+        // document_table: column names with dots
+        "SELECT \"commit.collection\" AS event, COUNT(*) AS count, COUNT(DISTINCT did) AS users "
+        "FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"commit.operation\" = 'create' "
+        "GROUP BY event ORDER BY count DESC;",
+        // document: JSON pointer paths
+        "SELECT \"/commit/collection\" AS event, COUNT(*) AS count, COUNT(DISTINCT did) AS users "
+        "FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"/commit/operation\" = 'create' "
+        "GROUP BY event ORDER BY count DESC;"
+    );
 
     // Test 1: document_table
     std::cout << "[1/2] Testing document_table Q2..." << std::endl;
     auto dt_space = setup_document_table("/tmp/bench_q2_dt", json_lines);
-    auto dt_result = run_query(dt_space, query, "document_table");
+    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
     std::cout << "  ✓ document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
 
     // Test 2: document (B-tree)
     std::cout << "[2/2] Testing document Q2..." << std::endl;
     auto doc_space = setup_document("/tmp/bench_q2_doc", json_lines);
-    auto doc_result = run_query(doc_space, query, "document");
+    auto doc_result = run_query(doc_space, queries.document_query, "document");
     std::cout << "  ✓ document:       " << doc_result.time_ms << "ms (" << doc_result.count << " groups)" << std::endl;
 
     // Summary
@@ -351,18 +376,23 @@ TEST_CASE("JSONBench 3: Simple filter (WHERE)", "[jsonbench][q3]") {
     
     print_header("JSONBench Q3: Filter by kind and operation (WHERE)", "", json_lines.size());
 
-    const std::string query = "SELECT * FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"commit.operation\" = 'create';";
+    QueryPair queries(
+        // document_table: column name with dot
+        "SELECT * FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"commit.operation\" = 'create';",
+        // document: JSON pointer path
+        "SELECT * FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"/commit/operation\" = 'create';"
+    );
 
     // Test 1: document_table
     std::cout << "[1/2] Testing document_table Q3..." << std::endl;
     auto dt_space = setup_document_table("/tmp/bench_q3_dt", json_lines);
-    auto dt_result = run_query(dt_space, query, "document_table");
+    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
     std::cout << "  ✓ document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " records)" << std::endl;
 
     // Test 2: document (B-tree)
     std::cout << "[2/2] Testing document Q3..." << std::endl;
     auto doc_space = setup_document("/tmp/bench_q3_doc", json_lines);
-    auto doc_result = run_query(doc_space, query, "document");
+    auto doc_result = run_query(doc_space, queries.document_query, "document");
     std::cout << "  ✓ document:       " << doc_result.time_ms << "ms (" << doc_result.count << " records)" << std::endl;
 
     // Summary
@@ -401,20 +431,27 @@ TEST_CASE("JSONBench 5: Aggregation (MIN/MAX with LIMIT)", "[jsonbench][q5]") {
     
     print_header("JSONBench Q5: Aggregation - MIN time_us (GROUP + LIMIT)", "", json_lines.size());
 
-    const std::string query = "SELECT did, MIN(time_us) AS first_time FROM bluesky_bench.bluesky "
-                              "WHERE kind = 'commit' AND \"commit.operation\" = 'create' "
-                              "GROUP BY did LIMIT 3;";
+    QueryPair queries(
+        // document_table: column name with dot
+        "SELECT did, MIN(time_us) AS first_time FROM bluesky_bench.bluesky "
+        "WHERE kind = 'commit' AND \"commit.operation\" = 'create' "
+        "GROUP BY did LIMIT 3;",
+        // document: JSON pointer path
+        "SELECT did, MIN(time_us) AS first_time FROM bluesky_bench.bluesky "
+        "WHERE kind = 'commit' AND \"/commit/operation\" = 'create' "
+        "GROUP BY did LIMIT 3;"
+    );
 
     // Test 1: document_table
     std::cout << "[1/2] Testing document_table Q5..." << std::endl;
     auto dt_space = setup_document_table("/tmp/bench_q5_dt", json_lines);
-    auto dt_result = run_query(dt_space, query, "document_table");
+    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
     std::cout << "  ✓ document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " records)" << std::endl;
 
     // Test 2: document (B-tree)
     std::cout << "[2/2] Testing document Q5..." << std::endl;
     auto doc_space = setup_document("/tmp/bench_q5_doc", json_lines);
-    auto doc_result = run_query(doc_space, query, "document");
+    auto doc_result = run_query(doc_space, queries.document_query, "document");
     std::cout << "  ✓ document:       " << doc_result.time_ms << "ms (" << doc_result.count << " records)" << std::endl;
 
     // Summary
