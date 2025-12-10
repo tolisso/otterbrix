@@ -3,6 +3,47 @@
 
 namespace components::document_table {
 
+    namespace {
+        // Convert SQL-safe column name back to document API path
+        // "kind" -> "/kind"
+        // "commit_dot_operation" -> "/commit/operation"
+        // "field_arr0_" -> "/field[0]"
+        std::string column_name_to_document_path(const std::string& column_name) {
+            std::string result = "/";
+            size_t i = 0;
+            while (i < column_name.size()) {
+                // Check for "_dot_"
+                if (i + 5 <= column_name.size() && column_name.substr(i, 5) == "_dot_") {
+                    result += '/';
+                    i += 5;
+                }
+                // Check for "_arr" followed by digit(s) and "_"
+                else if (i + 4 <= column_name.size() && 
+                         column_name.substr(i, 4) == "_arr" && 
+                         i + 4 < column_name.size() && 
+                         std::isdigit(column_name[i + 4])) {
+                    result += '[';
+                    i += 4;
+                    // Read all digits
+                    while (i < column_name.size() && std::isdigit(column_name[i])) {
+                        result += column_name[i];
+                        i++;
+                    }
+                    result += ']';
+                    // Skip trailing "_" if present
+                    if (i < column_name.size() && column_name[i] == '_') {
+                        i++;
+                    }
+                }
+                else {
+                    result += column_name[i];
+                    i++;
+                }
+            }
+            return result;
+        }
+    } // anonymous namespace
+
     document_table_storage_t::document_table_storage_t(std::pmr::memory_resource* resource,
                                                        table::storage::block_manager_t& block_manager)
         : resource_(resource)
@@ -196,8 +237,11 @@ namespace components::document_table {
                 continue;
             }
 
+            // Convert column name to document path
+            std::string doc_path = column_name_to_document_path(col_info->json_path);
+            
             // Проверяем, есть ли это поле в документе
-            if (!doc->is_exists(col_info->json_path)) {
+            if (!doc->is_exists(doc_path)) {
                 vec.set_null(0, true);
                 continue;
             }
@@ -205,56 +249,56 @@ namespace components::document_table {
             // Извлекаем значение в зависимости от типа
             switch (col_info->type.type()) {
             case types::logical_type::BOOLEAN:
-                if (doc->is_bool(col_info->json_path)) {
-                    vec.set_value(0, types::logical_value_t(doc->get_bool(col_info->json_path)));
+                if (doc->is_bool(doc_path)) {
+                    vec.set_value(0, types::logical_value_t(doc->get_bool(doc_path)));
                 } else {
                     vec.set_null(0, true);
                 }
                 break;
 
             case types::logical_type::INTEGER:
-                if (doc->is_int(col_info->json_path)) {
-                    vec.set_value(0, types::logical_value_t(doc->get_int(col_info->json_path)));
+                if (doc->is_int(doc_path)) {
+                    vec.set_value(0, types::logical_value_t(doc->get_int(doc_path)));
                 } else {
                     vec.set_null(0, true);
                 }
                 break;
 
             case types::logical_type::BIGINT:
-                if (doc->is_long(col_info->json_path)) {
-                    vec.set_value(0, types::logical_value_t(doc->get_long(col_info->json_path)));
+                if (doc->is_long(doc_path)) {
+                    vec.set_value(0, types::logical_value_t(doc->get_long(doc_path)));
                 } else {
                     vec.set_null(0, true);
                 }
                 break;
 
             case types::logical_type::UBIGINT:
-                if (doc->is_ulong(col_info->json_path)) {
-                    vec.set_value(0, types::logical_value_t(doc->get_ulong(col_info->json_path)));
+                if (doc->is_ulong(doc_path)) {
+                    vec.set_value(0, types::logical_value_t(doc->get_ulong(doc_path)));
                 } else {
                     vec.set_null(0, true);
                 }
                 break;
 
             case types::logical_type::DOUBLE:
-                if (doc->is_double(col_info->json_path)) {
-                    vec.set_value(0, types::logical_value_t(doc->get_double(col_info->json_path)));
+                if (doc->is_double(doc_path)) {
+                    vec.set_value(0, types::logical_value_t(doc->get_double(doc_path)));
                 } else {
                     vec.set_null(0, true);
                 }
                 break;
 
             case types::logical_type::FLOAT:
-                if (doc->is_float(col_info->json_path)) {
-                    vec.set_value(0, types::logical_value_t(doc->get_float(col_info->json_path)));
+                if (doc->is_float(doc_path)) {
+                    vec.set_value(0, types::logical_value_t(doc->get_float(doc_path)));
                 } else {
                     vec.set_null(0, true);
                 }
                 break;
 
             case types::logical_type::STRING_LITERAL:
-                if (doc->is_string(col_info->json_path)) {
-                    std::string str_val(doc->get_string(col_info->json_path));
+                if (doc->is_string(doc_path)) {
+                    std::string str_val(doc->get_string(doc_path));
                     vec.set_value(0, types::logical_value_t(str_val));
                 } else {
                     vec.set_null(0, true);
@@ -374,30 +418,32 @@ namespace components::document_table {
 
     types::logical_type document_table_storage_t::detect_value_type_in_document(const document::document_ptr& doc,
                                                                                 const std::string& json_path) {
-        if (!doc || !doc->is_exists(json_path)) {
+        std::string doc_path = column_name_to_document_path(json_path);
+        
+        if (!doc || !doc->is_exists(doc_path)) {
             return types::logical_type::NA;
         }
 
         // Проверяем типы в порядке приоритета
-        if (doc->is_bool(json_path)) {
+        if (doc->is_bool(doc_path)) {
             return types::logical_type::BOOLEAN;
         }
-        if (doc->is_int(json_path)) {
+        if (doc->is_int(doc_path)) {
             return types::logical_type::INTEGER;
         }
-        if (doc->is_long(json_path)) {
+        if (doc->is_long(doc_path)) {
             return types::logical_type::BIGINT;
         }
-        if (doc->is_ulong(json_path)) {
+        if (doc->is_ulong(doc_path)) {
             return types::logical_type::UBIGINT;
         }
-        if (doc->is_double(json_path)) {
+        if (doc->is_double(doc_path)) {
             return types::logical_type::DOUBLE;
         }
-        if (doc->is_float(json_path)) {
+        if (doc->is_float(doc_path)) {
             return types::logical_type::FLOAT;
         }
-        if (doc->is_string(json_path)) {
+        if (doc->is_string(doc_path)) {
             return types::logical_type::STRING_LITERAL;
         }
 
@@ -409,51 +455,53 @@ namespace components::document_table {
         const std::string& json_path,
         types::logical_type expected_type) {
 
-        if (!doc || !doc->is_exists(json_path)) {
+        std::string doc_path = column_name_to_document_path(json_path);
+        
+        if (!doc || !doc->is_exists(doc_path)) {
             return types::logical_value_t(); // null value
         }
 
         // Извлекаем значение в зависимости от ожидаемого типа
         switch (expected_type) {
         case types::logical_type::BOOLEAN:
-            if (doc->is_bool(json_path)) {
-                return types::logical_value_t(doc->get_bool(json_path));
+            if (doc->is_bool(doc_path)) {
+                return types::logical_value_t(doc->get_bool(doc_path));
             }
             break;
 
         case types::logical_type::INTEGER:
-            if (doc->is_int(json_path)) {
-                return types::logical_value_t(doc->get_int(json_path));
+            if (doc->is_int(doc_path)) {
+                return types::logical_value_t(doc->get_int(doc_path));
             }
             break;
 
         case types::logical_type::BIGINT:
-            if (doc->is_long(json_path)) {
-                return types::logical_value_t(doc->get_long(json_path));
+            if (doc->is_long(doc_path)) {
+                return types::logical_value_t(doc->get_long(doc_path));
             }
             break;
 
         case types::logical_type::UBIGINT:
-            if (doc->is_ulong(json_path)) {
-                return types::logical_value_t(doc->get_ulong(json_path));
+            if (doc->is_ulong(doc_path)) {
+                return types::logical_value_t(doc->get_ulong(doc_path));
             }
             break;
 
         case types::logical_type::DOUBLE:
-            if (doc->is_double(json_path)) {
-                return types::logical_value_t(doc->get_double(json_path));
+            if (doc->is_double(doc_path)) {
+                return types::logical_value_t(doc->get_double(doc_path));
             }
             break;
 
         case types::logical_type::FLOAT:
-            if (doc->is_float(json_path)) {
-                return types::logical_value_t(doc->get_float(json_path));
+            if (doc->is_float(doc_path)) {
+                return types::logical_value_t(doc->get_float(doc_path));
             }
             break;
 
         case types::logical_type::STRING_LITERAL:
-            if (doc->is_string(json_path)) {
-                std::string str_val(doc->get_string(json_path));
+            if (doc->is_string(doc_path)) {
+                std::string str_val(doc->get_string(doc_path));
                 return types::logical_value_t(str_val);
             }
             break;

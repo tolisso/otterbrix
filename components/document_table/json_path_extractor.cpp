@@ -105,7 +105,8 @@ namespace components::document_table {
                         continue;
                     }
 
-                    std::string array_path = current_path + "[" + std::to_string(i) + "]";
+                    // Use safe name: "field_arr0_", "field_arr1_" instead of "field[0]", "field[1]"
+                    std::string array_path = current_path + "_arr" + std::to_string(i) + "_";
 
                     if (elem_node->is_object() || elem_node->is_array()) {
                         // Вложенная структура в массиве
@@ -183,7 +184,9 @@ namespace components::document_table {
         if (parent.empty()) {
             return child;
         }
-        return parent + "." + child;
+        // Use "_dot_" instead of "." to make SQL-safe column names
+        // Example: "commit_dot_operation" instead of "commit.operation"
+        return parent + "_dot_" + child;
     }
 
 } // namespace components::document_table

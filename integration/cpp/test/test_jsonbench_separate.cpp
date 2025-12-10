@@ -44,8 +44,8 @@ struct BenchmarkResult {
 
 // Query pair for different storage types
 struct QueryPair {
-    std::string document_table_query;  // Uses "field.subfield" syntax
-    std::string document_query;        // Uses /field/subfield syntax
+    std::string document_table_query;  // Uses "field.subfield" syntax (column names with dots)
+    std::string document_query;        // Uses /field/subfield syntax (JSON pointers)
     
     QueryPair(const std::string& dt_query, const std::string& doc_query)
         : document_table_query(dt_query), document_query(doc_query) {}
@@ -313,8 +313,8 @@ TEST_CASE("JSONBench 1: Count by collection (GROUP BY)", "[jsonbench][q1]") {
     print_header("JSONBench Q1: Count events by collection (GROUP BY)", "", json_lines.size());
 
     QueryPair queries(
-        // document_table: column name with dot
-        "SELECT \"commit.collection\" AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;",
+        // document_table: SQL-safe column name (stored as "commit_dot_collection")
+        "SELECT commit_dot_collection AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;",
         // document: JSON pointer path
         "SELECT \"/commit/collection\" AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;"
     );
@@ -343,9 +343,9 @@ TEST_CASE("JSONBench 2: Count with DISTINCT (GROUP BY + WHERE)", "[jsonbench][q2
     print_header("JSONBench Q2: Count events + unique users (GROUP + WHERE)", "", json_lines.size());
 
     QueryPair queries(
-        // document_table: column names with dots
-        "SELECT \"commit.collection\" AS event, COUNT(*) AS count, COUNT(DISTINCT did) AS users "
-        "FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"commit.operation\" = 'create' "
+        // document_table: SQL-safe column names
+        "SELECT commit_dot_collection AS event, COUNT(*) AS count, COUNT(DISTINCT did) AS users "
+        "FROM bluesky_bench.bluesky WHERE kind = 'commit' AND commit_dot_operation = 'create' "
         "GROUP BY event ORDER BY count DESC;",
         // document: JSON pointer paths
         "SELECT \"/commit/collection\" AS event, COUNT(*) AS count, COUNT(DISTINCT did) AS users "
@@ -377,8 +377,8 @@ TEST_CASE("JSONBench 3: Simple filter (WHERE)", "[jsonbench][q3]") {
     print_header("JSONBench Q3: Filter by kind and operation (WHERE)", "", json_lines.size());
 
     QueryPair queries(
-        // document_table: column name with dot
-        "SELECT * FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"commit.operation\" = 'create';",
+        // document_table: SQL-safe column name
+        "SELECT * FROM bluesky_bench.bluesky WHERE kind = 'commit' AND commit_dot_operation = 'create';",
         // document: JSON pointer path
         "SELECT * FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"/commit/operation\" = 'create';"
     );
@@ -432,9 +432,9 @@ TEST_CASE("JSONBench 5: Aggregation (MIN/MAX with LIMIT)", "[jsonbench][q5]") {
     print_header("JSONBench Q5: Aggregation - MIN time_us (GROUP + LIMIT)", "", json_lines.size());
 
     QueryPair queries(
-        // document_table: column name with dot
+        // document_table: SQL-safe column name
         "SELECT did, MIN(time_us) AS first_time FROM bluesky_bench.bluesky "
-        "WHERE kind = 'commit' AND \"commit.operation\" = 'create' "
+        "WHERE kind = 'commit' AND commit_dot_operation = 'create' "
         "GROUP BY did LIMIT 3;",
         // document: JSON pointer path
         "SELECT did, MIN(time_us) AS first_time FROM bluesky_bench.bluesky "
