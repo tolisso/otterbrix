@@ -3,6 +3,24 @@
 
 namespace components::document_table {
 
+    namespace {
+        // Создает универсальный UNION тип для всех колонок
+        // UNION(NULL, STRING, BIGINT, UBIGINT, INTEGER, BOOL, DOUBLE, FLOAT)
+        types::complex_logical_type create_universal_union_type() {
+            std::vector<types::complex_logical_type> union_types;
+            union_types.emplace_back(types::logical_type::NA);            // NULL
+            union_types.emplace_back(types::logical_type::STRING_LITERAL);
+            union_types.emplace_back(types::logical_type::BIGINT);
+            union_types.emplace_back(types::logical_type::UBIGINT);
+            union_types.emplace_back(types::logical_type::INTEGER);
+            union_types.emplace_back(types::logical_type::BOOLEAN);
+            union_types.emplace_back(types::logical_type::DOUBLE);
+            union_types.emplace_back(types::logical_type::FLOAT);
+            
+            return types::complex_logical_type::create_union(std::move(union_types));
+        }
+    } // anonymous namespace
+
     dynamic_schema_t::dynamic_schema_t(std::pmr::memory_resource* resource)
         : resource_(resource)
         , columns_(resource)
@@ -80,40 +98,21 @@ namespace components::document_table {
             return new_columns;
         }
 
-        // Извлекаем все пути из документа
-        auto extracted_paths = extractor_->extract_paths(doc);
+        // Упрощенное извлечение: только имена полей (без типов!)
+        auto field_names = extractor_->extract_field_names(doc);
 
-        // Проходим по всем путям
-        for (const auto& path_info : extracted_paths) {
-            // Если путь уже существует, проверяем совместимость типов
-            if (has_path(path_info.path)) {
-                const auto* existing_col = get_column_info(path_info.path);
-                if (existing_col) {
-                    auto existing_type = existing_col->type.type();
-                    auto new_type = path_info.type;
-
-                    // Проверяем, что типы совпадают
-                    if (existing_type != new_type) {
-                        // UNION SUPPORT: вместо ошибки, создаем/расширяем union
-                        if (existing_col->is_union) {
-                            // Уже union - добавить новый тип если его нет
-                            extend_union_column(path_info.path, new_type);
-                        } else {
-                            // Первое несовпадение - создать union из двух типов
-                            create_union_column(path_info.path, existing_type, new_type);
-                        }
-                        // Схема изменилась - возвращаем обновленную колонку
-                        new_columns.push_back(*get_column_info(path_info.path));
-                    }
-                }
+        // Проходим по всем полям
+        for (const auto& field_name : field_names) {
+            // Если поле уже существует - пропускаем (тип не проверяем, т.к. universal union)
+            if (has_path(field_name)) {
                 continue;
             }
 
-            // Создаем новую колонку
-            types::complex_logical_type col_type(path_info.type);
-            col_type.set_alias(path_info.path);
+            // Создаем новую колонку с универсальным union типом
+            auto universal_type = create_universal_union_type();
+            universal_type.set_alias(field_name);
 
-            add_column(path_info.path, col_type, path_info.is_array, path_info.array_index);
+            add_column(field_name, universal_type, false, 0);
 
             // Запоминаем, что это новая колонка
             new_columns.push_back(columns_.back());

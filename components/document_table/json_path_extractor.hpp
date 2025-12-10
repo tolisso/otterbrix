@@ -11,18 +11,21 @@ namespace components::document_table {
 
     struct extracted_path_t {
         std::string path;            // JSON path (например, "user.address.city")
-        types::logical_type type;    // Тип данных
+        types::logical_type type;    // Тип данных (deprecated - используется universal union)
         bool is_array;               // Это элемент массива?
         size_t array_index;          // Индекс в массиве (если is_array=true)
-        bool is_nullable;            // Может быть NULL
+        bool is_nullable;            // Может быть NULL (deprecated - все nullable)
     };
 
     class json_path_extractor_t {
     public:
         explicit json_path_extractor_t(std::pmr::memory_resource* resource);
 
-        // Извлечение всех путей из документа
+        // Извлечение всех путей из документа (DEPRECATED - используйте extract_field_names)
         std::pmr::vector<extracted_path_t> extract_paths(const document::document_ptr& doc);
+        
+        // Упрощенное извлечение: только имена полей (без типов)
+        std::pmr::vector<std::string> extract_field_names(const document::document_ptr& doc);
 
         // Конфигурация
         struct config_t {
@@ -42,8 +45,14 @@ namespace components::document_table {
                                const std::string& current_path,
                                size_t depth,
                                std::pmr::vector<extracted_path_t>& result);
+        
+        // Упрощенное рекурсивное извлечение (только имена полей)
+        void extract_field_names_recursive(const document::json::json_trie_node* node,
+                                           const std::string& current_path,
+                                           size_t depth,
+                                           std::pmr::vector<std::string>& result);
 
-        // Определение типа из element
+        // Определение типа из element (deprecated)
         types::logical_type infer_type(const document::impl::element* elem) const;
 
         // Объединение путей с разделителем

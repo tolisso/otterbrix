@@ -24,6 +24,22 @@ namespace components::document_table {
         return result;
     }
 
+    std::pmr::vector<std::string> json_path_extractor_t::extract_field_names(const document::document_ptr& doc) {
+        std::pmr::vector<std::string> result(resource_);
+
+        if (!doc || !doc->is_valid()) {
+            return result;
+        }
+
+        // Получаем корневой узел JSON trie
+        const auto* root = doc->json_trie().get();
+
+        // Рекурсивно извлекаем только имена полей (без типов)
+        extract_field_names_recursive(root, "", 0, result);
+
+        return result;
+    }
+
     void json_path_extractor_t::extract_recursive(const document::json::json_trie_node* node,
                                                    const std::string& current_path,
                                                    size_t depth,
@@ -187,6 +203,81 @@ namespace components::document_table {
         // Use "_dot_" instead of "." to make SQL-safe column names
         // Example: "commit_dot_operation" instead of "commit.operation"
         return parent + "_dot_" + child;
+    }
+
+    void json_path_extractor_t::extract_field_names_recursive(const document::json::json_trie_node* node,
+                                                               const std::string& current_path,
+                                                               size_t depth,
+                                                               std::pmr::vector<std::string>& result) {
+        if (!node) {
+            return;
+        }
+
+        // Проверка максимальной глубины
+        if (depth >= config_.max_nesting_depth) {
+            return;
+        }
+
+        if (node->is_object()) {
+            // Объект: проходим по всем полям
+            const auto* obj = node->get_object();
+            for (const auto& [key_node, value_node] : *obj) {
+                // Извлекаем имя поля из ключа
+                std::string field_name;
+                if (key_node->is_mut()) {
+                    const auto* elem = key_node->get_mut();
+                    if (elem->is_string()) {
+                        auto str_result = elem->get_string();
+                        if (!str_result.error()) {
+                            field_name = std::string(str_result.value());
+                        }
+                    }
+                }
+
+                if (field_name.empty()) {
+                    continue; // Пропускаем невалидные ключи
+                }
+
+                std::string field_path = join_path(current_path, field_name);
+                const auto* child = value_node.get();
+
+                if (child->is_object() || child->is_array()) {
+                    // Рекурсивно обрабатываем вложенные структуры
+                    if (config_.extract_nested_objects) {
+                        extract_field_names_recursive(child, field_path, depth + 1, result);
+                    }
+                } else if (child->is_mut()) {
+                    // Скалярное значение - добавляем путь (БЕЗ типа!)
+                    result.push_back(field_path);
+                }
+            }
+
+        } else if (node->is_array()) {
+            // Массив: обрабатываем элементы если flatten_arrays включен
+            if (!config_.flatten_arrays) {
+                return;
+            }
+
+            const auto* arr = node->get_array();
+            size_t array_size = std::min(arr->size(), config_.max_array_size);
+
+            for (size_t i = 0; i < array_size; ++i) {
+                const auto* elem = arr->get(i);
+
+                // Формируем путь с индексом массива: parent_arr0, parent_arr1, ...
+                std::string array_path = current_path + "_arr" + std::to_string(i);
+
+                if (elem->is_object() || elem->is_array()) {
+                    // Рекурсивно обрабатываем вложенные структуры
+                    if (config_.extract_nested_objects) {
+                        extract_field_names_recursive(elem, array_path, depth + 1, result);
+                    }
+                } else if (elem->is_mut()) {
+                    // Скалярное значение - добавляем путь
+                    result.push_back(array_path);
+                }
+            }
+        }
     }
 
 } // namespace components::document_table
