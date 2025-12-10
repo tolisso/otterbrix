@@ -9,22 +9,20 @@ namespace components::logical_plan {
         explicit node_function_t(std::pmr::memory_resource* resource, std::string&& name);
         explicit node_function_t(std::pmr::memory_resource* resource,
                                  std::string&& name,
-                                 std::pmr::vector<core::parameter_id_t>&& args);
-
-        void add_argument(core::parameter_id_t arg);
+                                 std::pmr::vector<expressions::param_storage>&& args);
 
         const std::string& name() const noexcept;
-        const std::pmr::vector<core::parameter_id_t>& args() const noexcept;
+        const std::pmr::vector<expressions::param_storage>& args() const noexcept;
 
-        static node_ptr deserialize(serializer::base_deserializer_t* deserializer);
+        static node_ptr deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     private:
         hash_t hash_impl() const final;
         std::string to_string_impl() const final;
-        void serialize_impl(serializer::base_serializer_t* serializer) const final;
+        void serialize_impl(serializer::msgpack_serializer_t* serializer) const final;
 
         std::string name_;
-        std::pmr::vector<core::parameter_id_t> args_;
+        std::pmr::vector<expressions::param_storage> args_;
     };
 
     using node_function_ptr = boost::intrusive_ptr<node_function_t>;
@@ -32,6 +30,6 @@ namespace components::logical_plan {
     node_function_ptr make_node_function(std::pmr::memory_resource* resource, std::string&& name);
     node_function_ptr make_node_function(std::pmr::memory_resource* resource,
                                          std::string&& name,
-                                         std::pmr::vector<core::parameter_id_t>&& args);
+                                         std::pmr::vector<expressions::param_storage>&& args);
 
 } // namespace components::logical_plan

@@ -1,12 +1,30 @@
 #include "node_data.hpp"
 
-#include <components/serialization/deserializer.hpp>
+#include <components/types/operations_helper.hpp>
 
+#include <components/serialization/deserializer.hpp>
 #include <components/serialization/serializer.hpp>
 
 #include <sstream>
 
 namespace components::logical_plan {
+
+    namespace impl {
+        template<typename T = void>
+        struct set_doc_value;
+
+        template<>
+        struct set_doc_value<void> {
+            template<typename T>
+            constexpr auto operator()(std::string_view key,
+                                      document::document_ptr& doc,
+                                      const vector::data_chunk_t& chunk,
+                                      size_t row,
+                                      size_t column) const {
+                doc->set(key, chunk.data[column].data<T>()[row]);
+            }
+        };
+    } // namespace impl
 
     node_data_t::node_data_t(std::pmr::memory_resource* resource,
                              std::pmr::vector<components::document::document_ptr>&& documents)
@@ -28,8 +46,16 @@ namespace components::logical_plan {
         chunk.copy(std::get<components::vector::data_chunk_t>(data_), 0);
     }
 
+    std::pmr::vector<document::document_ptr>& node_data_t::documents() {
+        return std::get<std::pmr::vector<document::document_ptr>>(data_);
+    }
+
     const std::pmr::vector<document::document_ptr>& node_data_t::documents() const {
         return std::get<std::pmr::vector<document::document_ptr>>(data_);
+    }
+
+    components::vector::data_chunk_t& node_data_t::data_chunk() {
+        return std::get<components::vector::data_chunk_t>(data_);
     }
 
     const components::vector::data_chunk_t& node_data_t::data_chunk() const {
@@ -44,6 +70,30 @@ namespace components::logical_plan {
         return std::holds_alternative<std::pmr::vector<document::document_ptr>>(data_);
     }
 
+    void node_data_t::convert_to_documents() {
+        if (uses_documents()) {
+            return;
+        }
+
+        const auto& chunk = std::get<components::vector::data_chunk_t>(data_);
+        std::pmr::vector<document::document_ptr> documents(chunk.resource());
+        documents.reserve(chunk.size());
+
+        for (size_t i = 0; i < chunk.size(); i++) {
+            documents.emplace_back(document::make_document(chunk.resource()));
+            for (size_t j = 0; j < chunk.column_count(); j++) {
+                types::simple_physical_type_switch<impl::set_doc_value>(chunk.data[j].type().to_physical_type(),
+                                                                        chunk.data[j].type().alias(),
+                                                                        documents.back(),
+                                                                        chunk,
+                                                                        i,
+                                                                        j);
+            }
+        }
+
+        data_ = std::move(documents);
+    }
+
     size_t node_data_t::size() const {
         if (std::holds_alternative<std::pmr::vector<document::document_ptr>>(data_)) {
             return std::get<std::pmr::vector<document::document_ptr>>(data_).size();
@@ -52,9 +102,24 @@ namespace components::logical_plan {
         }
     }
 
-    node_ptr node_data_t::deserialize(serializer::base_deserializer_t* deserializer) {
-        // TODO: deserializer data chunk
-        return make_node_raw_data(deserializer->resource(), deserializer->deserialize_documents(1));
+    node_ptr node_data_t::deserialize(serializer::msgpack_deserializer_t* deserializer) {
+        bool uses_data_chunk = deserializer->deserialize_bool(1);
+        node_ptr result;
+        if (uses_data_chunk) {
+            deserializer->advance_array(2);
+            result = make_node_raw_data(deserializer->resource(), vector::data_chunk_t::deserialize(deserializer));
+            deserializer->pop_array();
+        } else {
+            deserializer->advance_array(2);
+            std::pmr::vector<document::document_ptr> docs(deserializer->resource());
+            docs.reserve(deserializer->current_array_size());
+            for (size_t i = 0; i < docs.capacity(); i++) {
+                docs.emplace_back(document::document_t::deserialize(deserializer, i));
+            }
+            result = make_node_raw_data(deserializer->resource(), std::move(docs));
+            deserializer->pop_array();
+        }
+        return result;
     }
 
     hash_t node_data_t::hash_impl() const { return 0; }
@@ -68,11 +133,22 @@ namespace components::logical_plan {
         return stream.str();
     }
 
-    void node_data_t::serialize_impl(serializer::base_serializer_t* serializer) const {
+    void node_data_t::serialize_impl(serializer::msgpack_serializer_t* serializer) const {
         // TODO: serializer data chunk
-        serializer->start_array(2);
-        serializer->append("type", serializer::serialization_type::logical_node_data);
-        serializer->append("documents", documents());
+        serializer->start_array(3);
+        serializer->append_enum(serializer::serialization_type::logical_node_data);
+        if (uses_data_chunk()) {
+            serializer->append(true);
+            data_chunk().serialize(serializer);
+        } else {
+            serializer->append(false);
+            const auto& docs = documents();
+            serializer->start_array(docs.size());
+            for (const auto& doc : docs) {
+                doc->serialize(serializer);
+            }
+            serializer->end_array();
+        }
         serializer->end_array();
     }
 

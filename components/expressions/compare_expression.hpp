@@ -18,18 +18,16 @@ namespace components::expressions {
 
         compare_expression_t(std::pmr::memory_resource* resource,
                              compare_type type,
-                             side_t side,
-                             const key_t& key,
+                             const key_t& primary_key,
                              core::parameter_id_t);
         compare_expression_t(std::pmr::memory_resource* resource,
                              compare_type type,
-                             const key_t& key_left,
-                             const key_t& key_right);
+                             const key_t& primary_key,
+                             const key_t& secondary_key);
 
         compare_type type() const;
-        side_t side() const;
-        const key_t& key_left() const;
-        const key_t& key_right() const;
+        const key_t& primary_key() const;
+        const key_t& secondary_key() const;
         core::parameter_id_t value() const;
         const std::pmr::vector<expression_ptr>& children() const;
 
@@ -38,31 +36,29 @@ namespace components::expressions {
 
         bool is_union() const;
 
-        static expression_ptr deserialize(serializer::base_deserializer_t* deserializer);
+        static expression_ptr deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     private:
         compare_type type_;
-        side_t side_;
-        key_t key_left_;
-        key_t key_right_;
+        key_t primary_key_;
+        key_t secondary_key_;
         core::parameter_id_t value_;
         std::pmr::vector<expression_ptr> children_;
 
         hash_t hash_impl() const final;
         std::string to_string_impl() const final;
         bool equal_impl(const expression_i* rhs) const final;
-        void serialize_impl(serializer::base_serializer_t* serializer) const final;
+        void serialize_impl(serializer::msgpack_serializer_t* serializer) const final;
     };
 
     compare_expression_ptr make_compare_expression(std::pmr::memory_resource* resource,
                                                    compare_type type,
-                                                   side_t side,
-                                                   const key_t& key,
+                                                   const key_t& primary_key,
                                                    core::parameter_id_t id);
     compare_expression_ptr make_compare_expression(std::pmr::memory_resource* resource,
                                                    compare_type type,
-                                                   const key_t& key_left,
-                                                   const key_t& key_right);
+                                                   const key_t& primary_key,
+                                                   const key_t& secondary_key);
     compare_expression_ptr make_compare_expression(std::pmr::memory_resource* resource, compare_type type);
     compare_expression_ptr make_compare_union_expression(std::pmr::memory_resource* resource, compare_type type);
 

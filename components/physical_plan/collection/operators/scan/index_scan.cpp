@@ -11,7 +11,7 @@ namespace components::collection::operators {
                                              const logical_plan::storage_parameters* parameters) {
         using expressions::compare_type;
         using logical_plan::get_parameter;
-        auto value = get_parameter(parameters, expr->value()).as_logical_value();
+        auto value = get_parameter(parameters, expr->value());
         switch (expr->type()) {
             case compare_type::eq:
                 return {index->find(value)};
@@ -57,11 +57,11 @@ namespace components::collection::operators {
         , limit_(limit) {}
 
     void index_scan::on_execute_impl(pipeline::context_t* pipeline_context) {
-        trace(context_->log(), "index_scan by field \"{}\"", expr_->key_left().as_string());
-        auto* index = index::search_index(context_->index_engine(), {expr_->key_left()});
+        trace(context_->log(), "index_scan by field \"{}\"", expr_->primary_key().as_string());
+        auto* index = index::search_index(context_->index_engine(), {expr_->primary_key()});
         if (index && index->is_disk()) {
             trace(context_->log(), "index_scan: send query into disk");
-            auto value = logical_plan::get_parameter(&pipeline_context->parameters, expr_->value()).as_logical_value();
+            auto value = logical_plan::get_parameter(&pipeline_context->parameters, expr_->value());
             pipeline_context->send(index->disk_agent(),
                                    services::index::handler_id(services::index::route::find),
                                    value,
@@ -80,8 +80,8 @@ namespace components::collection::operators {
     }
 
     void index_scan::on_resume_impl(pipeline::context_t* pipeline_context) {
-        trace(context_->log(), "resume index_scan by field \"{}\"", expr_->key_left().as_string());
-        auto* index = index::search_index(context_->index_engine(), {expr_->key_left()});
+        trace(context_->log(), "resume index_scan by field \"{}\"", expr_->primary_key().as_string());
+        auto* index = index::search_index(context_->index_engine(), {expr_->primary_key()});
         trace(context_->log(), "index_scan: prepare result");
         if (!limit_.check(0)) {
             return; //limit = 0

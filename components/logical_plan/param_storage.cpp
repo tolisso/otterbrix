@@ -33,26 +33,32 @@ namespace components::logical_plan {
         return get_parameter(&values_, id);
     }
 
-    void parameter_node_t::serialize(serializer::base_serializer_t* serializer) const {
+    void parameter_node_t::serialize(serializer::msgpack_serializer_t* serializer) const {
         serializer->start_array(2);
-        serializer->append("type", serializer::serialization_type::parameters);
+        serializer->append_enum(serializer::serialization_type::parameters);
         serializer->start_array(values_.parameters.size());
         for (const auto& [key, value] : values_.parameters) {
             serializer->start_array(2);
-            serializer->append("key", key);
-            serializer->append("value", value);
+            serializer->append(key);
+            value.serialize(serializer);
             serializer->end_array();
         }
         serializer->end_array();
         serializer->end_array();
     }
 
-    boost::intrusive_ptr<parameter_node_t> parameter_node_t::deserialize(serializer::base_deserializer_t* deserilizer) {
+    boost::intrusive_ptr<parameter_node_t>
+    parameter_node_t::deserialize(serializer::msgpack_deserializer_t* deserilizer) {
         auto res = make_parameter_node(deserilizer->resource());
         deserilizer->advance_array(1);
         for (size_t i = 0; i < deserilizer->current_array_size(); i++) {
-            auto p = deserilizer->deserialize_param_pair(res->parameters().tape(), i);
-            res->add_parameter(p.first, p.second);
+            deserilizer->advance_array(i);
+            auto param_id = deserilizer->deserialize_param_id(0);
+            deserilizer->advance_array(1);
+            auto value = types::logical_value_t::deserialize(deserilizer);
+            deserilizer->pop_array();
+            deserilizer->pop_array();
+            res->add_parameter(param_id, value);
         }
         deserilizer->pop_array();
         return res;

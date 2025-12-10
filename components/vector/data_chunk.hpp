@@ -18,6 +18,7 @@ namespace components::vector {
         std::vector<vector_t> data;
         vector_t row_ids;
 
+        bool empty() const { return count_ == 0; }
         uint64_t size() const { return count_; }
         uint64_t capacity() const { return capacity_; }
         uint64_t column_count() const { return data.size(); }
@@ -76,6 +77,9 @@ namespace components::vector {
         size_t column_index(std::string_view key) const;
 
         std::pmr::memory_resource* resource() const;
+
+        void serialize(serializer::msgpack_serializer_t* serializer) const;
+        static data_chunk_t deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     private:
         std::pmr::memory_resource* resource_;

@@ -1,8 +1,13 @@
 #include "document.hpp"
+#include "msgpack/msgpack_encoder.hpp"
+
 #include <boost/json/src.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 #include <charconv>
 #include <components/document/string_splitter.hpp>
+#include <components/serialization/deserializer.hpp>
+#include <components/serialization/serializer.hpp>
+#include <components/types/logical_value.hpp>
 #include <components/types/operations_helper.hpp>
 #include <utility>
 
@@ -88,6 +93,8 @@ namespace components::document {
 
     bool document_t::is_ulong(std::string_view json_pointer) const { return is_as<uint64_t>(json_pointer); }
 
+    bool document_t::is_uhugeint(std::string_view json_pointer) const { return is_as<absl::uint128>(json_pointer); }
+
     bool document_t::is_tinyint(std::string_view json_pointer) const { return is_as<int8_t>(json_pointer); }
 
     bool document_t::is_smallint(std::string_view json_pointer) const { return is_as<int16_t>(json_pointer); }
@@ -123,6 +130,10 @@ namespace components::document {
     uint32_t document_t::get_uint(std::string_view json_pointer) const { return get_as<uint32_t>(json_pointer); }
 
     uint64_t document_t::get_ulong(std::string_view json_pointer) const { return get_as<uint64_t>(json_pointer); }
+
+    absl::uint128 document_t::get_uhugeint(std::string_view json_pointer) const {
+        return get_as<absl::uint128>(json_pointer);
+    }
 
     int8_t document_t::get_tinyint(std::string_view json_pointer) const { return get_as<int8_t>(json_pointer); }
 
@@ -576,6 +587,22 @@ namespace components::document {
 
     document_t::allocator_type* document_t::get_allocator() { return element_ind_->get_allocator(); }
 
+    void document_t::serialize(serializer::msgpack_serializer_t* serializer) const {
+        std::stringstream result;
+        msgpack::packer packer(result);
+        packer.pack(*this);
+
+        serializer->append(result.str());
+    }
+
+    document_t::ptr document_t::deserialize(serializer::msgpack_deserializer_t* deserializer, size_t index) {
+        auto sbuf = deserializer->deserialize_string(index);
+        msgpack::unpacked msg;
+        msgpack::unpack(msg, sbuf.data(), sbuf.size());
+
+        return to_document(msg.get(), deserializer->resource());
+    }
+
     std::pmr::string value_to_string(const impl::element* value, std::pmr::memory_resource* allocator) {
         using types::logical_type;
 
@@ -869,6 +896,50 @@ namespace components::document {
                 break;
         }
         return result;
+    }
+
+    template<typename T>
+    bool templated_update(document_t& doc, std::string_view json_pointer, const types::logical_value_t& update) {
+        T new_value = update.value<T>();
+        if (doc.get_as<T>(json_pointer) != new_value) {
+            doc.set(json_pointer, new_value);
+            return true;
+        }
+        return false;
+    }
+
+    bool document_t::update(std::string_view json_pointer, const types::logical_value_t& update) {
+        switch (update.type().to_physical_type()) {
+            case types::physical_type::BOOL:
+                return templated_update<bool>(*this, json_pointer, update);
+            case types::physical_type::UINT8:
+                return templated_update<uint8_t>(*this, json_pointer, update);
+            case types::physical_type::UINT16:
+                return templated_update<uint16_t>(*this, json_pointer, update);
+            case types::physical_type::UINT32:
+                return templated_update<uint32_t>(*this, json_pointer, update);
+            case types::physical_type::UINT64:
+                return templated_update<uint64_t>(*this, json_pointer, update);
+            case types::physical_type::INT8:
+                return templated_update<int8_t>(*this, json_pointer, update);
+            case types::physical_type::INT16:
+                return templated_update<int16_t>(*this, json_pointer, update);
+            case types::physical_type::INT32:
+                return templated_update<int32_t>(*this, json_pointer, update);
+            case types::physical_type::INT64:
+                return templated_update<int64_t>(*this, json_pointer, update);
+            case types::physical_type::UINT128:
+                return templated_update<types::uint128_t>(*this, json_pointer, update);
+            case types::physical_type::INT128:
+                return templated_update<types::int128_t>(*this, json_pointer, update);
+            case types::physical_type::FLOAT:
+                return templated_update<float>(*this, json_pointer, update);
+            case types::physical_type::DOUBLE:
+                return templated_update<double>(*this, json_pointer, update);
+            case types::physical_type::STRING:
+                return templated_update<std::string_view>(*this, json_pointer, update);
+        }
+        return false;
     }
 
     std::pmr::string serialize_document(const document_ptr& document) { return document->to_json(); }

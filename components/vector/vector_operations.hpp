@@ -367,7 +367,6 @@ namespace components::vector::vector_ops {
 
     void combine_hash(vector_t& hashes, vector_t& input, uint64_t count);
     void combine_hash(vector_t& hashes, vector_t& input, const indexing_vector_t& rindexing, uint64_t count);
-    void write_to_storage(vector_t& source, uint64_t count, std::byte* target);
 
     template<typename COMP>
     int64_t compare(vector_t& left,
@@ -395,10 +394,10 @@ namespace components::vector::vector_ops {
                 return index<uint32_t, COMP>(left, right, count, true_indexing, false_indexing);
             case types::physical_type::UINT64:
                 return index<uint64_t, COMP>(left, right, count, true_indexing, false_indexing);
-            // case types::physical_type::INT128:
-            // 	   return index<int128_t, COMP>(left, right, count, true_indexing, false_indexing);
-            // case types::physical_type::UINT128:
-            // 	   return index<uint128_t, COMP>(left, right, count, true_indexing, false_indexing);
+            case types::physical_type::INT128:
+                return index<types::int128_t, COMP>(left, right, count, true_indexing, false_indexing);
+            case types::physical_type::UINT128:
+                return index<types::uint128_t, COMP>(left, right, count, true_indexing, false_indexing);
             case types::physical_type::FLOAT:
                 return index<float, COMP>(left, right, count, true_indexing, false_indexing);
             case types::physical_type::DOUBLE:

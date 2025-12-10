@@ -22,8 +22,6 @@ TEST_CASE("integration::cpp::test_collection") {
     test_clear_directory(config);
     test_spaces space(config);
     auto* dispatcher = space.dispatcher();
-    auto tape = std::make_unique<impl::base_document>(dispatcher->resource());
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     dispatcher->load();
 
     INFO("initialization") {
@@ -104,14 +102,13 @@ TEST_CASE("integration::cpp::test_collection") {
                 components::logical_plan::make_node_aggregate(dispatcher->resource(), {database_name, collection_name});
             auto expr = components::expressions::make_compare_expression(dispatcher->resource(),
                                                                          compare_type::gt,
-                                                                         side_t::left,
-                                                                         key{"count"},
+                                                                         key{"count", side_t::left},
                                                                          id_par{1});
             plan->append_child(components::logical_plan::make_node_match(dispatcher->resource(),
                                                                          {database_name, collection_name},
                                                                          std::move(expr)));
             auto params = components::logical_plan::make_parameter_node(dispatcher->resource());
-            params->add_parameter(id_par{1}, new_value(90));
+            params->add_parameter(id_par{1}, components::types::logical_value_t(90));
             auto cur = dispatcher->find(session, plan, params);
             REQUIRE(cur->is_success());
             REQUIRE(cur->size() == 9);
@@ -123,14 +120,13 @@ TEST_CASE("integration::cpp::test_collection") {
                 components::logical_plan::make_node_aggregate(dispatcher->resource(), {database_name, collection_name});
             auto expr = components::expressions::make_compare_expression(dispatcher->resource(),
                                                                          compare_type::regex,
-                                                                         side_t::left,
-                                                                         key{"countStr"},
+                                                                         key{"countStr", side_t::left},
                                                                          id_par{1});
             plan->append_child(components::logical_plan::make_node_match(dispatcher->resource(),
                                                                          {database_name, collection_name},
                                                                          std::move(expr)));
             auto params = components::logical_plan::make_parameter_node(dispatcher->resource());
-            params->add_parameter(id_par{1}, new_value("9$"));
+            params->add_parameter(id_par{1}, components::types::logical_value_t("9$"));
             auto cur = dispatcher->find(session, plan, params);
             REQUIRE(cur->is_success());
             REQUIRE(cur->size() == 10);
@@ -144,20 +140,18 @@ TEST_CASE("integration::cpp::test_collection") {
                 components::expressions::make_compare_union_expression(dispatcher->resource(), compare_type::union_or);
             expr->append_child(components::expressions::make_compare_expression(dispatcher->resource(),
                                                                                 compare_type::gt,
-                                                                                side_t::left,
-                                                                                key{"count"},
+                                                                                key{"count", side_t::left},
                                                                                 id_par{1}));
             expr->append_child(components::expressions::make_compare_expression(dispatcher->resource(),
                                                                                 compare_type::regex,
-                                                                                side_t::left,
-                                                                                key{"countStr"},
+                                                                                key{"countStr", side_t::left},
                                                                                 id_par{2}));
             plan->append_child(components::logical_plan::make_node_match(dispatcher->resource(),
                                                                          {database_name, collection_name},
                                                                          std::move(expr)));
             auto params = components::logical_plan::make_parameter_node(dispatcher->resource());
-            params->add_parameter(id_par{1}, new_value(90));
-            params->add_parameter(id_par{2}, new_value(std::string_view{"9$"}));
+            params->add_parameter(id_par{1}, components::types::logical_value_t(90));
+            params->add_parameter(id_par{2}, components::types::logical_value_t(std::string_view{"9$"}));
             auto cur = dispatcher->find(session, plan, params);
             REQUIRE(cur->is_success());
             REQUIRE(cur->size() == 18);
@@ -173,28 +167,25 @@ TEST_CASE("integration::cpp::test_collection") {
                 components::expressions::make_compare_union_expression(dispatcher->resource(), compare_type::union_or);
             expr_or->append_child(components::expressions::make_compare_expression(dispatcher->resource(),
                                                                                    compare_type::gt,
-                                                                                   side_t::left,
-                                                                                   key{"count"},
+                                                                                   key{"count", side_t::left},
                                                                                    id_par{1}));
             expr_or->append_child(components::expressions::make_compare_expression(dispatcher->resource(),
                                                                                    compare_type::regex,
-                                                                                   side_t::left,
-                                                                                   key{"countStr"},
+                                                                                   key{"countStr", side_t::left},
                                                                                    id_par{2}));
             expr_and->append_child(expr_or);
             expr_and->append_child(components::expressions::make_compare_expression(dispatcher->resource(),
                                                                                     compare_type::lte,
-                                                                                    side_t::left,
-                                                                                    key{"count"},
+                                                                                    key{"count", side_t::left},
                                                                                     id_par{3}));
 
             plan->append_child(components::logical_plan::make_node_match(dispatcher->resource(),
                                                                          {database_name, collection_name},
                                                                          std::move(expr_and)));
             auto params = components::logical_plan::make_parameter_node(dispatcher->resource());
-            params->add_parameter(id_par{1}, new_value(90));
-            params->add_parameter(id_par{2}, new_value(std::string_view{"9$"}));
-            params->add_parameter(id_par{3}, new_value(30));
+            params->add_parameter(id_par{1}, components::types::logical_value_t(90));
+            params->add_parameter(id_par{2}, components::types::logical_value_t(std::string_view{"9$"}));
+            params->add_parameter(id_par{3}, components::types::logical_value_t(30));
             auto cur = dispatcher->find(session, plan, params);
             REQUIRE(cur->is_success());
             REQUIRE(cur->size() == 3);
@@ -222,14 +213,13 @@ TEST_CASE("integration::cpp::test_collection") {
                 components::logical_plan::make_node_aggregate(dispatcher->resource(), {database_name, collection_name});
             auto expr = components::expressions::make_compare_expression(dispatcher->resource(),
                                                                          compare_type::eq,
-                                                                         side_t::left,
-                                                                         key{"_id"},
+                                                                         key{"_id", side_t::left},
                                                                          id_par{1});
             plan->append_child(components::logical_plan::make_node_match(dispatcher->resource(),
                                                                          {database_name, collection_name},
                                                                          std::move(expr)));
             auto params = components::logical_plan::make_parameter_node(dispatcher->resource());
-            params->add_parameter(id_par{1}, new_value(gen_id(1, dispatcher->resource())));
+            params->add_parameter(id_par{1}, components::types::logical_value_t(gen_id(1, dispatcher->resource())));
             auto cur = dispatcher->find_one(session, plan, params);
             REQUIRE(cur->next_document()->get_long("count") == 1);
         }
@@ -239,14 +229,13 @@ TEST_CASE("integration::cpp::test_collection") {
                 components::logical_plan::make_node_aggregate(dispatcher->resource(), {database_name, collection_name});
             auto expr = components::expressions::make_compare_expression(dispatcher->resource(),
                                                                          compare_type::eq,
-                                                                         side_t::left,
-                                                                         key{"count"},
+                                                                         key{"count", side_t::left},
                                                                          id_par{1});
             plan->append_child(components::logical_plan::make_node_match(dispatcher->resource(),
                                                                          {database_name, collection_name},
                                                                          std::move(expr)));
             auto params = components::logical_plan::make_parameter_node(dispatcher->resource());
-            params->add_parameter(id_par{1}, new_value(10));
+            params->add_parameter(id_par{1}, components::types::logical_value_t(10));
             auto cur = dispatcher->find_one(session, plan, params);
             REQUIRE(cur->is_success());
             REQUIRE(cur->next_document()->get_long("count") == 10);
@@ -259,20 +248,18 @@ TEST_CASE("integration::cpp::test_collection") {
                 components::expressions::make_compare_union_expression(dispatcher->resource(), compare_type::union_and);
             expr->append_child(components::expressions::make_compare_expression(dispatcher->resource(),
                                                                                 compare_type::gt,
-                                                                                side_t::left,
-                                                                                key{"count"},
+                                                                                key{"count", side_t::left},
                                                                                 id_par{1}));
             expr->append_child(components::expressions::make_compare_expression(dispatcher->resource(),
                                                                                 compare_type::regex,
-                                                                                side_t::left,
-                                                                                key{"countStr"},
+                                                                                key{"countStr", side_t::left},
                                                                                 id_par{2}));
             plan->append_child(components::logical_plan::make_node_match(dispatcher->resource(),
                                                                          {database_name, collection_name},
                                                                          std::move(expr)));
             auto params = components::logical_plan::make_parameter_node(dispatcher->resource());
-            params->add_parameter(id_par{1}, new_value(90));
-            params->add_parameter(id_par{2}, new_value(std::string_view{"9$"}));
+            params->add_parameter(id_par{1}, components::types::logical_value_t(90));
+            params->add_parameter(id_par{2}, components::types::logical_value_t(std::string_view{"9$"}));
             auto cur = dispatcher->find_one(session, plan, params);
             REQUIRE(cur->is_success());
             REQUIRE(cur->next_document()->get_long("count") == 99);

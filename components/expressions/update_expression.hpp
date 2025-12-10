@@ -9,8 +9,8 @@
 #include "key.hpp"
 
 namespace components::serializer {
-    class base_serializer_t;
-    class base_deserializer_t;
+    class msgpack_serializer_t;
+    class msgpack_deserializer_t;
 } // namespace components::serializer
 
 namespace components::logical_plan {
@@ -19,7 +19,6 @@ namespace components::logical_plan {
 
 namespace components::expressions {
 
-    // TODO: add math operations: exponentiation, square root, cube root, factorial, absolute value, bitwise operations
     enum class update_expr_type : uint8_t
     {
         set,
@@ -52,16 +51,13 @@ namespace components::expressions {
         public:
             expr_output_t() = default;
             // not explicit for easier use, since it is not visible outside anyway
-            expr_output_t(document::value_t value);
             expr_output_t(types::logical_value_t value);
 
-            document::value_t& document_value();
-            const document::value_t& document_value() const;
-            types::logical_value_t& table_value();
-            const types::logical_value_t& table_value() const;
+            types::logical_value_t& value();
+            const types::logical_value_t& value() const;
 
         private:
-            std::variant<document::value_t, types::logical_value_t, std::monostate> output_;
+            types::logical_value_t output_;
         };
 
     public:
@@ -86,8 +82,8 @@ namespace components::expressions {
         expr_output_t& output();
         const expr_output_t& output() const;
 
-        virtual void serialize(serializer::base_serializer_t* serializer) = 0;
-        static update_expr_ptr deserialize(serializer::base_deserializer_t* deserializer);
+        virtual void serialize(serializer::msgpack_serializer_t* serializer) = 0;
+        static update_expr_ptr deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     protected:
         virtual bool execute_impl(document::document_ptr& to,
@@ -116,8 +112,8 @@ namespace components::expressions {
 
         bool operator==(const update_expr_set_t& rhs) const;
 
-        void serialize(serializer::base_serializer_t* serializer) override;
-        static update_expr_ptr deserialize(serializer::base_deserializer_t* deserializer);
+        void serialize(serializer::msgpack_serializer_t* serializer) override;
+        static update_expr_ptr deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     protected:
         bool execute_impl(document::document_ptr& to,
@@ -138,15 +134,14 @@ namespace components::expressions {
 
     class update_expr_get_value_t final : public update_expr_t {
     public:
-        explicit update_expr_get_value_t(key_t key, side_t side);
+        explicit update_expr_get_value_t(key_t key);
 
         const key_t& key() const noexcept;
-        side_t side() const noexcept;
 
         bool operator==(const update_expr_get_value_t& rhs) const;
 
-        void serialize(serializer::base_serializer_t* serializer) override;
-        static update_expr_ptr deserialize(serializer::base_deserializer_t* deserializer);
+        void serialize(serializer::msgpack_serializer_t* serializer) override;
+        static update_expr_ptr deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     protected:
         bool execute_impl(document::document_ptr& to,
@@ -161,7 +156,6 @@ namespace components::expressions {
 
     private:
         key_t key_;
-        side_t side_;
     };
 
     using update_expr_get_value_ptr = boost::intrusive_ptr<update_expr_get_value_t>;
@@ -174,8 +168,8 @@ namespace components::expressions {
 
         bool operator==(const update_expr_get_const_value_t& rhs) const;
 
-        void serialize(serializer::base_serializer_t* serializer) override;
-        static update_expr_ptr deserialize(serializer::base_deserializer_t* deserializer);
+        void serialize(serializer::msgpack_serializer_t* serializer) override;
+        static update_expr_ptr deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     protected:
         bool execute_impl(document::document_ptr& to,
@@ -200,8 +194,8 @@ namespace components::expressions {
 
         bool operator==(const update_expr_calculate_t& rhs) const;
 
-        void serialize(serializer::base_serializer_t* serializer) override;
-        static update_expr_ptr deserialize(serializer::base_deserializer_t* deserializer);
+        void serialize(serializer::msgpack_serializer_t* serializer) override;
+        static update_expr_ptr deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     protected:
         bool execute_impl(document::document_ptr& to,

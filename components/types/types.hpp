@@ -6,6 +6,11 @@
 #include <string>
 #include <vector>
 
+namespace components::serializer {
+    class msgpack_serializer_t;
+    class msgpack_deserializer_t;
+} // namespace components::serializer
+
 namespace components::types {
 
     using int128_t = absl::int128;
@@ -117,7 +122,8 @@ namespace components::types {
         FUNCTION = 105,
         LAMBDA = 106,
         UNION = 107,
-        ARRAY = 108,
+        VARIANT = 108,
+        ARRAY = 109,
 
         UNKNOWN = 127, // Unknown type, used for parameter expressions
         INVALID = 255
@@ -224,8 +230,6 @@ namespace components::types {
         }
     }
 
-    // for now only supports std::string for string types
-    // TODO: convert multiple string formats to logical_type::STRING_LITERAL
     template<typename T>
     constexpr logical_type to_logical_type() {
         if constexpr (std::is_same<T, std::nullptr_t>::value) {
@@ -272,7 +276,8 @@ namespace components::types {
             return logical_type::FLOAT;
         } else if constexpr (std::is_same<T, double>::value) {
             return logical_type::DOUBLE;
-        } else if constexpr (std::is_same<T, std::string>::value) {
+        } else if constexpr (std::is_same<T, std::string>::value || std::is_same<T, std::pmr::string>::value ||
+                             std::is_same<T, std::string_view>::value) {
             return logical_type::STRING_LITERAL;
         } else {
             return logical_type::INVALID;
@@ -392,6 +397,7 @@ namespace components::types {
         static bool type_is_constant_size(logical_type type);
 
         static complex_logical_type create_decimal(uint8_t width, uint8_t scale, std::string alias = "");
+        static complex_logical_type create_enum(std::vector<logical_value_t> entries, std::string alias = "");
         static complex_logical_type create_list(const complex_logical_type& internal_type, std::string alias = "");
         static complex_logical_type
         create_array(const complex_logical_type& internal_type, size_t array_size, std::string alias = "");
@@ -401,6 +407,10 @@ namespace components::types {
         static complex_logical_type create_struct(const std::vector<complex_logical_type>& fields,
                                                   std::string alias = "");
         static complex_logical_type create_union(std::vector<complex_logical_type> fields, std::string alias = "");
+        static complex_logical_type create_variant(std::string alias = "");
+
+        void serialize(serializer::msgpack_serializer_t* serializer) const;
+        static complex_logical_type deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     private:
         logical_type type_ = logical_type::NA;
@@ -429,6 +439,9 @@ namespace components::types {
             , required(required)
             , doc(std::move(doc)) {}
 
+        void serialize(serializer::msgpack_serializer_t* serializer) const;
+        static field_description deserialize(serializer::msgpack_deserializer_t* deserializer);
+
         uint64_t field_id;
         bool required;
         std::string doc;
@@ -436,7 +449,7 @@ namespace components::types {
 
     class logical_type_extension {
     public:
-        // duplicates from logical_type, but declared separatly for clarity
+        // duplicates from logical_type, but declared separately for clarity
         enum class extension_type : uint8_t
         {
             GENERIC = 0,
@@ -458,6 +471,9 @@ namespace components::types {
         const std::string& alias() const noexcept { return alias_; }
         void set_alias(const std::string& alias);
 
+        virtual void serialize(serializer::msgpack_serializer_t* serializer) const;
+        static std::unique_ptr<logical_type_extension> deserialize(serializer::msgpack_deserializer_t* deserializer);
+
     protected:
         extension_type type_ = extension_type::GENERIC;
         std::string alias_;
@@ -469,6 +485,9 @@ namespace components::types {
 
         const complex_logical_type& internal_type() const noexcept { return items_type_; }
         size_t size() const noexcept { return size_; }
+
+        void serialize(serializer::msgpack_serializer_t* serializer) const override;
+        static std::unique_ptr<logical_type_extension> deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     private:
         complex_logical_type items_type_;
@@ -490,6 +509,9 @@ namespace components::types {
         uint64_t value_id() const { return value_id_; }
         bool value_required() const { return value_required_; }
 
+        void serialize(serializer::msgpack_serializer_t* serializer) const override;
+        static std::unique_ptr<logical_type_extension> deserialize(serializer::msgpack_deserializer_t* deserializer);
+
     private:
         complex_logical_type key_;
         complex_logical_type value_;
@@ -503,12 +525,15 @@ namespace components::types {
         explicit list_logical_type_extension(complex_logical_type type);
         list_logical_type_extension(uint64_t field_id, complex_logical_type type, bool required);
 
-        const complex_logical_type& node() const noexcept { return type_; }
+        const complex_logical_type& node() const noexcept { return items_type_; }
         uint64_t field_id() const noexcept { return field_id_; }
         bool required() const noexcept { return required_; }
 
+        void serialize(serializer::msgpack_serializer_t* serializer) const override;
+        static std::unique_ptr<logical_type_extension> deserialize(serializer::msgpack_deserializer_t* deserializer);
+
     private:
-        complex_logical_type type_;
+        complex_logical_type items_type_;
         uint64_t field_id_;
         bool required_;
     };
@@ -524,6 +549,9 @@ namespace components::types {
         const std::vector<complex_logical_type>& child_types() const { return fields_; }
         const std::vector<field_description>& descriptions() const { return descriptions_; }
 
+        void serialize(serializer::msgpack_serializer_t* serializer) const override;
+        static std::unique_ptr<logical_type_extension> deserialize(serializer::msgpack_deserializer_t* deserializer);
+
     private:
         std::vector<complex_logical_type> fields_;
         std::vector<field_description> descriptions_;
@@ -536,6 +564,9 @@ namespace components::types {
         uint8_t width() const noexcept { return width_; }
         uint8_t scale() const noexcept { return scale_; }
 
+        void serialize(serializer::msgpack_serializer_t* serializer) const override;
+        static std::unique_ptr<logical_type_extension> deserialize(serializer::msgpack_deserializer_t* deserializer);
+
     private:
         uint8_t width_;
         uint8_t scale_;
@@ -547,6 +578,9 @@ namespace components::types {
 
         const std::vector<logical_value_t>& entries() const noexcept { return entries_; }
 
+        void serialize(serializer::msgpack_serializer_t* serializer) const override;
+        static std::unique_ptr<logical_type_extension> deserialize(serializer::msgpack_deserializer_t* deserializer);
+
     private:
         std::vector<logical_value_t> entries_; // integer literal for value and alias for entry name
     };
@@ -554,6 +588,9 @@ namespace components::types {
     class user_logical_type_extension : public logical_type_extension {
     public:
         explicit user_logical_type_extension(std::string catalog, std::vector<logical_value_t> user_type_modifiers);
+
+        void serialize(serializer::msgpack_serializer_t* serializer) const override;
+        static std::unique_ptr<logical_type_extension> deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     private:
         std::string catalog_;
@@ -564,6 +601,9 @@ namespace components::types {
     public:
         explicit function_logical_type_extension(complex_logical_type return_type,
                                                  std::vector<complex_logical_type> arguments);
+
+        void serialize(serializer::msgpack_serializer_t* serializer) const override;
+        static std::unique_ptr<logical_type_extension> deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     private:
         complex_logical_type return_type_;

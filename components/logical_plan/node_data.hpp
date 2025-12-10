@@ -21,21 +21,25 @@ namespace components::logical_plan {
 
         explicit node_data_t(std::pmr::memory_resource* resource, const components::vector::data_chunk_t& chunk);
 
+        std::pmr::vector<components::document::document_ptr>& documents();
         const std::pmr::vector<components::document::document_ptr>& documents() const;
+        components::vector::data_chunk_t& data_chunk();
         const components::vector::data_chunk_t& data_chunk() const;
         bool uses_data_chunk() const;
         bool uses_documents() const;
 
+        void convert_to_documents();
+
         size_t size() const;
 
-        static node_ptr deserialize(serializer::base_deserializer_t* deserializer);
+        static node_ptr deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     private:
         data_t data_;
 
         hash_t hash_impl() const final;
         std::string to_string_impl() const final;
-        void serialize_impl(serializer::base_serializer_t* serializer) const final;
+        void serialize_impl(serializer::msgpack_serializer_t* serializer) const final;
     };
 
     using node_data_ptr = boost::intrusive_ptr<node_data_t>;

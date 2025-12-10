@@ -14,15 +14,16 @@ namespace components::logical_plan {
                                           std::pmr::vector<types::complex_logical_type> schema = {},
                                           catalog::used_format_t storage_format = catalog::used_format_t::undefined);
 
-        static node_ptr deserialize(serializer::base_deserializer_t* deserializer);
+        static node_ptr deserialize(serializer::msgpack_deserializer_t* deserializer);
 
+        std::pmr::vector<types::complex_logical_type>& schema();
         const std::pmr::vector<types::complex_logical_type>& schema() const;
         catalog::used_format_t storage_format() const;
 
     private:
         hash_t hash_impl() const final;
         std::string to_string_impl() const final;
-        void serialize_impl(serializer::base_serializer_t* serializer) const final;
+        void serialize_impl(serializer::msgpack_serializer_t* serializer) const final;
 
         std::pmr::vector<types::complex_logical_type> schema_;
         catalog::used_format_t storage_format_;

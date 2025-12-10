@@ -3,6 +3,7 @@
 #include <cassert>
 #include <chrono>
 #include <memory>
+#include <memory_resource>
 #include <msgpack.hpp>
 #include <variant>
 
@@ -46,6 +47,8 @@ namespace components::types {
         static logical_value_t create_array(const complex_logical_type& internal_type,
                                             const std::vector<logical_value_t>& values);
         static logical_value_t create_numeric(const complex_logical_type& type, int64_t value);
+        static logical_value_t create_enum(const complex_logical_type& enum_type, std::string_view key);
+        static logical_value_t create_enum(const complex_logical_type& enum_type, int32_t value);
         static logical_value_t create_decimal(int64_t value, uint8_t width, uint8_t scale);
         static logical_value_t create_map(const complex_logical_type& key_type,
                                           const complex_logical_type& value_type,
@@ -57,6 +60,7 @@ namespace components::types {
                                            const std::vector<logical_value_t>& values);
         static logical_value_t
         create_union(std::vector<complex_logical_type> types, uint8_t tag, logical_value_t value);
+        static logical_value_t create_variant(std::vector<logical_value_t> values);
 
         static logical_value_t sum(const logical_value_t& value1, const logical_value_t& value2);
         static logical_value_t subtract(const logical_value_t& value1, const logical_value_t& value2);
@@ -74,6 +78,9 @@ namespace components::types {
         static logical_value_t bit_not(const logical_value_t& value);
         static logical_value_t bit_shift_l(const logical_value_t& value1, const logical_value_t& value2);
         static logical_value_t bit_shift_r(const logical_value_t& value1, const logical_value_t& value2);
+
+        void serialize(serializer::msgpack_serializer_t* serializer) const;
+        static logical_value_t deserialize(serializer::msgpack_deserializer_t* deserializer);
 
     private:
         complex_logical_type type_;
@@ -153,9 +160,24 @@ namespace components::types {
         , value_(std::make_unique<std::string>(std::move(value))) {}
 
     template<>
+    inline logical_value_t::logical_value_t(std::pmr::string value)
+        : type_(logical_type::STRING_LITERAL)
+        , value_(std::make_unique<std::string>(value.data(), value.size())) {}
+
+    template<>
     inline logical_value_t::logical_value_t(std::string_view value)
         : type_(logical_type::STRING_LITERAL)
         , value_(std::make_unique<std::string>(std::move(value))) {}
+
+    template<>
+    inline logical_value_t::logical_value_t(char* value)
+        : type_(logical_type::STRING_LITERAL)
+        , value_(std::make_unique<std::string>(value)) {}
+
+    template<>
+    inline logical_value_t::logical_value_t(const char* value)
+        : type_(logical_type::STRING_LITERAL)
+        , value_(std::make_unique<std::string>(value)) {}
 
     template<typename T>
     T logical_value_t::value() const {

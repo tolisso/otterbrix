@@ -33,6 +33,34 @@ namespace components::sql::transform {
         return *endptr == '\0';
     }
 
+    expressions::side_t deduce_side(const name_collection_t& names, const std::string& target_name) {
+        if (target_name.empty()) {
+            return expressions::side_t::undefined;
+        }
+        if (names.left_name.collection == target_name || names.left_alias == target_name) {
+            return expressions::side_t::left;
+        } else if (names.right_name.collection == target_name || names.right_alias == target_name) {
+            return expressions::side_t::right;
+        } else {
+            return expressions::side_t::undefined;
+        }
+    }
+
+    void column_ref_t::deduce_side(const name_collection_t& names) {
+        field.set_side(transform::deduce_side(names, table));
+    }
+
+    column_ref_t columnref_to_fied(ColumnRef* ref) {
+        auto lst = ref->fields->lst;
+        if (lst.empty()) {
+            return column_ref_t();
+        } else if (lst.size() == 1) {
+            return column_ref_t{{}, expressions::key_t(strVal(lst.back().data))};
+        } else {
+            return column_ref_t{strVal(std::next(lst.rbegin())->data), expressions::key_t(strVal(lst.rbegin()->data))};
+        }
+    }
+
     std::string node_tag_to_string(NodeTag type) {
         switch (type) {
             case T_A_Expr:
@@ -146,4 +174,59 @@ namespace components::sql::transform {
                 return "unknown";
         }
     }
+
+    types::complex_logical_type get_type(TypeName* type) {
+        types::complex_logical_type column;
+        if (auto linint_name = strVal(linitial(type->names)); !std::strcmp(linint_name, "pg_catalog")) {
+            if (auto col = get_logical_type(strVal(lsecond(type->names))); col != types::logical_type::DECIMAL) {
+                column = col;
+            } else {
+                if (list_length(type->typmods) != 2) {
+                    throw parser_exception_t{"Incorrect modifiers for DECIMAL, width and scale required", ""};
+                }
+
+                auto width = pg_ptr_assert_cast<A_Const>(linitial(type->typmods), T_A_Const);
+                auto scale = pg_ptr_assert_cast<A_Const>(lsecond(type->typmods), T_A_Const);
+
+                if (width->val.type != scale->val.type || width->val.type != T_Integer) {
+                    throw parser_exception_t{"Incorrect width or scale for DECIMAL, must be integer", ""};
+                }
+                column = types::complex_logical_type::create_decimal(static_cast<uint8_t>(intVal(&width->val)),
+                                                                     static_cast<uint8_t>(intVal(&scale->val)));
+            }
+        } else {
+            column = get_logical_type(linint_name);
+        }
+
+        if (list_length(type->arrayBounds)) {
+            auto size = pg_ptr_assert_cast<Value>(linitial(type->arrayBounds), T_Value);
+            assert(size->type == T_Integer);
+            column = types::complex_logical_type::create_array(column, intVal(size));
+        }
+        return column;
+    }
+
+    template<typename Container>
+    void fill_with_types(Container& container, PGList& list) {
+        container.reserve(list.lst.size());
+        for (auto data : list.lst) {
+            auto coldef = pg_ptr_assert_cast<ColumnDef>(data.data, T_ColumnDef);
+            types::complex_logical_type type = get_type(coldef->typeName);
+            type.set_alias(coldef->colname);
+            container.emplace_back(std::move(type));
+        }
+    }
+
+    std::vector<types::complex_logical_type> get_types(PGList& list) {
+        std::vector<types::complex_logical_type> types;
+        fill_with_types(types, list);
+        return types;
+    }
+
+    std::pmr::vector<types::complex_logical_type> get_types(std::pmr::memory_resource* resource, PGList& list) {
+        std::pmr::vector<types::complex_logical_type> types(resource);
+        fill_with_types(types, list);
+        return types;
+    }
+
 } // namespace components::sql::transform

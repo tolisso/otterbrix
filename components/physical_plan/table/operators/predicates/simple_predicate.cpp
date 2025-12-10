@@ -60,11 +60,11 @@ namespace components::table::operators::predicates {
                     if (side == expressions::side_t::left) {
                         assert(column_index < chunk_left.column_count());
                         return comp(chunk_left.data.at(column_index).data<LeftType>()[index_left],
-                                    value.as<RightType>());
+                                    value.value<RightType>());
                     } else {
                         assert(column_index < chunk_right.column_count());
                         return comp(chunk_right.data.at(column_index).data<LeftType>()[index_right],
-                                    value.as<RightType>());
+                                    value.value<RightType>());
                     }
                 };
             }
@@ -121,13 +121,11 @@ namespace components::table::operators::predicates {
                                 const std::pmr::vector<types::complex_logical_type>& types,
                                 const logical_plan::storage_parameters* parameters,
                                 expressions::side_t side) {
-            assert(side != expressions::side_t::undefined);
-            size_t column_index =
-                get_column_index(side == expressions::side_t::left ? expr->key_left() : expr->key_right(), types);
+            size_t column_index = get_column_index(expr->primary_key(), types);
             const auto& expr_val = parameters->parameters.at(expr->value());
 
             auto type_left = types.at(column_index).to_physical_type();
-            auto type_right = expr_val.physical_type();
+            auto type_right = expr_val.type().to_physical_type();
 
             return types::double_simple_physical_type_switch<create_unary_comparator_t>(type_left,
                                                                                         type_right,
@@ -143,26 +141,26 @@ namespace components::table::operators::predicates {
                                       const logical_plan::storage_parameters* parameters,
                                       expressions::side_t side) {
             assert(side != expressions::side_t::undefined);
-            size_t column_index =
-                get_column_index(side == expressions::side_t::left ? expr->key_left() : expr->key_right(), types);
+            size_t column_index = get_column_index(expr->primary_key(), types);
             auto expr_val = parameters->parameters.at(expr->value());
 
-            return [column_index, val = expr_val.as_string(), side](const vector::data_chunk_t& chunk_left,
-                                                                    const vector::data_chunk_t& chunk_right,
-                                                                    size_t index_left,
-                                                                    size_t index_right) {
-                if (side == expressions::side_t::left) {
-                    assert(column_index < chunk_left.column_count());
-                    return std::regex_match(
-                        chunk_left.data.at(column_index).data<std::string_view>()[index_left].data(),
-                        std::regex(fmt::format(".*{}.*", val)));
-                } else {
-                    assert(column_index < chunk_right.column_count());
-                    return std::regex_match(
-                        chunk_right.data.at(column_index).data<std::string_view>()[index_right].data(),
-                        std::regex(fmt::format(".*{}.*", val)));
-                }
-            };
+            return
+                [column_index, val = expr_val.value<std::string_view>(), side](const vector::data_chunk_t& chunk_left,
+                                                                               const vector::data_chunk_t& chunk_right,
+                                                                               size_t index_left,
+                                                                               size_t index_right) {
+                    if (side == expressions::side_t::left) {
+                        assert(column_index < chunk_left.column_count());
+                        return std::regex_match(
+                            chunk_left.data.at(column_index).data<std::string_view>()[index_left].data(),
+                            std::regex(fmt::format(".*{}.*", val)));
+                    } else {
+                        assert(column_index < chunk_right.column_count());
+                        return std::regex_match(
+                            chunk_right.data.at(column_index).data<std::string_view>()[index_right].data(),
+                            std::regex(fmt::format(".*{}.*", val)));
+                    }
+                };
         }
 
         template<typename COMP>
@@ -171,13 +169,13 @@ namespace components::table::operators::predicates {
                                  const std::pmr::vector<types::complex_logical_type>& types_left,
                                  const std::pmr::vector<types::complex_logical_type>& types_right) {
             bool one_sided = false;
-            size_t column_index_left = get_column_index(expr->key_left(), types_left);
-            size_t column_index_right = get_column_index(expr->key_right(), types_right);
+            size_t column_index_left = get_column_index(expr->primary_key(), types_left);
+            size_t column_index_right = get_column_index(expr->secondary_key(), types_right);
             types::physical_type type_left = types_left.at(column_index_left).to_physical_type();
             types::physical_type type_right;
             if (column_index_right == -1) {
                 // one-sided expr
-                column_index_right = get_column_index(expr->key_right(), types_left);
+                column_index_right = get_column_index(expr->secondary_key(), types_left);
                 one_sided = true;
                 type_right = types_left.at(column_index_right).to_physical_type();
             } else {
@@ -197,11 +195,11 @@ namespace components::table::operators::predicates {
                                        const std::pmr::vector<types::complex_logical_type>& types_left,
                                        const std::pmr::vector<types::complex_logical_type>& types_right) {
             bool one_sided = false;
-            size_t column_index_left = get_column_index(expr->key_left(), types_left);
-            size_t column_index_right = get_column_index(expr->key_right(), types_right);
+            size_t column_index_left = get_column_index(expr->primary_key(), types_left);
+            size_t column_index_right = get_column_index(expr->secondary_key(), types_right);
             if (column_index_right == -1) {
                 // one-sided expr
-                column_index_right = get_column_index(expr->key_right(), types_left);
+                column_index_right = get_column_index(expr->secondary_key(), types_left);
             }
 
             return [column_index_left, column_index_right, one_sided](const vector::data_chunk_t& chunk_left,
@@ -231,18 +229,18 @@ namespace components::table::operators::predicates {
                           const std::pmr::vector<types::complex_logical_type>& types_right,
                           const logical_plan::storage_parameters* parameters) {
             // TODO: use schema to determine expr side before this
-            if (!expr->key_left().is_null() && !expr->key_right().is_null()) {
+            if (!expr->primary_key().is_null() && !expr->secondary_key().is_null()) {
                 return create_binary_comparator<COMP>(expr, types_left, types_right);
             } else {
-                if (expr->side() == expressions::side_t::left) {
+                if (expr->primary_key().side() == expressions::side_t::left) {
                     return create_unary_comparator<COMP>(expr, types_left, parameters, expressions::side_t::left);
-                } else if (expr->side() == expressions::side_t::right) {
+                } else if (expr->primary_key().side() == expressions::side_t::right) {
                     return create_unary_comparator<COMP>(expr, types_right, parameters, expressions::side_t::right);
                 } else {
                     auto it = std::find_if(types_left.begin(),
                                            types_left.end(),
                                            [&expr](const types::complex_logical_type& type) {
-                                               return type.alias() == expr->key_left().as_string();
+                                               return type.alias() == expr->primary_key().as_string();
                                            });
                     if (it != types_left.end()) {
                         return create_unary_comparator<COMP>(expr, types_left, parameters, expressions::side_t::left);
@@ -250,10 +248,11 @@ namespace components::table::operators::predicates {
                     it = std::find_if(types_right.begin(),
                                       types_right.end(),
                                       [&expr](const types::complex_logical_type& type) {
-                                          return type.alias() == expr->key_left().as_string();
+                                          return type.alias() == expr->primary_key().as_string();
                                       });
                     if (it != types_right.end()) {
-                        return create_unary_comparator<COMP>(expr, types_right, parameters, expressions::side_t::right);
+                        // undefined sided expressions store value on the left side by default
+                        return create_unary_comparator<COMP>(expr, types_right, parameters, expressions::side_t::left);
                     }
                 }
             }
@@ -267,18 +266,18 @@ namespace components::table::operators::predicates {
                                 const std::pmr::vector<types::complex_logical_type>& types_right,
                                 const logical_plan::storage_parameters* parameters) {
             // TODO: use schema to determine expr side before this
-            if (!expr->key_left().is_null() && !expr->key_right().is_null()) {
+            if (!expr->primary_key().is_null() && !expr->secondary_key().is_null()) {
                 return create_binary_regex_comparator(expr, types_left, types_right);
             } else {
-                if (expr->side() == expressions::side_t::left) {
+                if (expr->primary_key().side() == expressions::side_t::left) {
                     return create_unary_regex_comparator(expr, types_left, parameters, expressions::side_t::left);
-                } else if (expr->side() == expressions::side_t::right) {
+                } else if (expr->primary_key().side() == expressions::side_t::right) {
                     return create_unary_regex_comparator(expr, types_right, parameters, expressions::side_t::right);
                 } else {
                     auto it = std::find_if(types_left.begin(),
                                            types_left.end(),
                                            [&expr](const types::complex_logical_type& type) {
-                                               return type.alias() == expr->key_left().as_string();
+                                               return type.alias() == expr->primary_key().as_string();
                                            });
                     if (it != types_left.end()) {
                         return create_unary_regex_comparator(expr, types_left, parameters, expressions::side_t::left);
@@ -286,10 +285,11 @@ namespace components::table::operators::predicates {
                     it = std::find_if(types_right.begin(),
                                       types_right.end(),
                                       [&expr](const types::complex_logical_type& type) {
-                                          return type.alias() == expr->key_left().as_string();
+                                          return type.alias() == expr->primary_key().as_string();
                                       });
                     if (it != types_right.end()) {
-                        return create_unary_regex_comparator(expr, types_right, parameters, expressions::side_t::right);
+                        // undefined sided expressions store value on the left side by default
+                        return create_unary_regex_comparator(expr, types_right, parameters, expressions::side_t::left);
                     }
                 }
             }

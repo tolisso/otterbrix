@@ -8,6 +8,7 @@ using components::expressions::compare_type;
 using components::expressions::side_t;
 using key = components::expressions::key_t;
 using id_par = core::parameter_id_t;
+using namespace components::types;
 
 static const database_name_t database_name = "testdatabase";
 static const collection_name_t collection_name = "testcollection";
@@ -103,8 +104,7 @@ constexpr int kDocuments = 100;
             components::logical_plan::make_node_aggregate(dispatcher->resource(), {database_name, collection_name});   \
         auto expr = components::expressions::make_compare_expression(dispatcher->resource(),                           \
                                                                      COMPARE,                                          \
-                                                                     SIDE,                                             \
-                                                                     key{KEY},                                         \
+                                                                     key{KEY, SIDE},                                   \
                                                                      id_par{1});                                       \
         plan->append_child(components::logical_plan::make_node_match(dispatcher->resource(),                           \
                                                                      {database_name, collection_name},                 \
@@ -129,8 +129,6 @@ TEST_CASE("integration::test_index::base") {
     test_clear_directory(config);
     test_spaces space(config);
     auto* dispatcher = space.dispatcher();
-    auto tape = std::make_unique<impl::base_document>(dispatcher->resource());
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
 
     INFO("initialization") {
         INIT_COLLECTION();
@@ -147,23 +145,22 @@ TEST_CASE("integration::test_index::base") {
                 components::logical_plan::make_node_aggregate(dispatcher->resource(), {database_name, collection_name});
             auto expr = components::expressions::make_compare_expression(dispatcher->resource(),
                                                                          compare_type::eq,
-                                                                         side_t::left,
-                                                                         key{"count"},
+                                                                         key{"count", side_t::left},
                                                                          id_par{1});
             plan->append_child(components::logical_plan::make_node_match(dispatcher->resource(),
                                                                          {database_name, collection_name},
                                                                          std::move(expr)));
             auto params = components::logical_plan::make_parameter_node(dispatcher->resource());
-            params->add_parameter(id_par{1}, new_value(10));
+            params->add_parameter(id_par{1}, logical_value_t(10));
             auto c = dispatcher->find(session, plan, params);
             REQUIRE(c->size() == 1);
         } while (false);
-        CHECK_FIND_COUNT(compare_type::eq, side_t::left, new_value(10), 1);
-        CHECK_FIND_COUNT(compare_type::gt, side_t::left, new_value(10), 90);
-        CHECK_FIND_COUNT(compare_type::lt, side_t::left, new_value(10), 9);
-        CHECK_FIND_COUNT(compare_type::ne, side_t::left, new_value(10), 99);
-        CHECK_FIND_COUNT(compare_type::gte, side_t::left, new_value(10), 91);
-        CHECK_FIND_COUNT(compare_type::lte, side_t::left, new_value(10), 10);
+        CHECK_FIND_COUNT(compare_type::eq, side_t::left, logical_value_t(10), 1);
+        CHECK_FIND_COUNT(compare_type::gt, side_t::left, logical_value_t(10), 90);
+        CHECK_FIND_COUNT(compare_type::lt, side_t::left, logical_value_t(10), 9);
+        CHECK_FIND_COUNT(compare_type::ne, side_t::left, logical_value_t(10), 99);
+        CHECK_FIND_COUNT(compare_type::gte, side_t::left, logical_value_t(10), 91);
+        CHECK_FIND_COUNT(compare_type::lte, side_t::left, logical_value_t(10), 10);
     }
 }
 
@@ -186,16 +183,14 @@ TEST_CASE("integration::test_index::save_load") {
         test_spaces space(config);
         auto* dispatcher = space.dispatcher();
         dispatcher->load();
-        auto tape = std::make_unique<impl::base_document>(dispatcher->resource());
-        auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
 
         CHECK_FIND_ALL();
-        CHECK_FIND_COUNT(compare_type::eq, side_t::left, new_value(10), 1);
-        CHECK_FIND_COUNT(compare_type::gt, side_t::left, new_value(10), 90);
-        CHECK_FIND_COUNT(compare_type::lt, side_t::left, new_value(10), 9);
-        CHECK_FIND_COUNT(compare_type::ne, side_t::left, new_value(10), 99);
-        CHECK_FIND_COUNT(compare_type::gte, side_t::left, new_value(10), 91);
-        CHECK_FIND_COUNT(compare_type::lte, side_t::left, new_value(10), 10);
+        CHECK_FIND_COUNT(compare_type::eq, side_t::left, logical_value_t(10), 1);
+        CHECK_FIND_COUNT(compare_type::gt, side_t::left, logical_value_t(10), 90);
+        CHECK_FIND_COUNT(compare_type::lt, side_t::left, logical_value_t(10), 9);
+        CHECK_FIND_COUNT(compare_type::ne, side_t::left, logical_value_t(10), 99);
+        CHECK_FIND_COUNT(compare_type::gte, side_t::left, logical_value_t(10), 91);
+        CHECK_FIND_COUNT(compare_type::lte, side_t::left, logical_value_t(10), 10);
     }
 }
 

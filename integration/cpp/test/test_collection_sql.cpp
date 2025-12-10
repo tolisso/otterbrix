@@ -69,24 +69,24 @@ TEST_CASE("integration::cpp::test_collection::sql::base") {
             auto stated = cur->type_data()[1];
 
             REQUIRE(types::complex_logical_type::contains(computed, [](const types::complex_logical_type& type) {
-                return type.alias() == "_id" && type.type() == logical_type::STRING_LITERAL;
+                return type.alias() == "_id" && type.type() == types::logical_type::STRING_LITERAL;
             }));
             REQUIRE(types::complex_logical_type::contains(computed, [](const types::complex_logical_type& type) {
-                return type.alias() == "name" && type.type() == logical_type::STRING_LITERAL;
+                return type.alias() == "name" && type.type() == types::logical_type::STRING_LITERAL;
             }));
             REQUIRE(types::complex_logical_type::contains(computed, [](const types::complex_logical_type& type) {
-                return type.alias() == "count" && type.type() == logical_type::BIGINT;
+                return type.alias() == "count" && type.type() == types::logical_type::BIGINT;
             }));
 
             REQUIRE(types::complex_logical_type::contains(stated, [](const types::complex_logical_type& type) {
-                return type.alias() == "field1" && type.type() == logical_type::STRING_LITERAL;
+                return type.alias() == "field1" && type.type() == types::logical_type::STRING_LITERAL;
             }));
             REQUIRE(types::complex_logical_type::contains(stated, [](const types::complex_logical_type& type) {
-                if (type.type() != logical_type::ARRAY) {
+                if (type.type() != types::logical_type::ARRAY) {
                     return false;
                 }
                 auto array = static_cast<types::array_logical_type_extension*>(type.extension());
-                return type.alias() == "field2" && array->internal_type() == logical_type::INTEGER &&
+                return type.alias() == "field2" && array->internal_type() == types::logical_type::INTEGER &&
                        array->size() == 10;
             }));
         }
@@ -402,5 +402,75 @@ TEST_CASE("integration::cpp::test_collection::sql::index") {
             auto cur = dispatcher->execute_sql(session, "DROP INDEX TestDatabase.TestCollection.base_count;");
             REQUIRE(cur->is_success());
         }
+    }
+}
+
+TEST_CASE("integration::cpp::test_collection::sql::udt") {
+    auto config = test_create_config("/tmp/test_collection_sql/udt");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+
+    INFO("register types") {
+        {
+            auto session = otterbrix::session_id_t();
+            auto cur = dispatcher->execute_sql(session, R"_(CREATE TYPE custom_type_name AS (f1 int, f2 string);)_");
+            REQUIRE(cur->is_success());
+        }
+        {
+            auto session = otterbrix::session_id_t();
+            auto cur = dispatcher->execute_sql(session, R"_(CREATE TYPE custom_enum AS ENUM ('odd', 'even');)_");
+            REQUIRE(cur->is_success());
+        }
+    }
+
+    INFO("create table") {
+        auto session = otterbrix::session_id_t();
+        dispatcher->execute_sql(session, R"_(CREATE DATABASE TestDatabase;)_");
+        auto cur = dispatcher->execute_sql(
+            session,
+            R"_(CREATE TABLE TestDatabase.TestCollection (custom_type_name custom_type, custom_enum oddness);)_");
+        REQUIRE(cur->is_success());
+    }
+
+    INFO("insert") {
+        {
+            auto session = otterbrix::session_id_t();
+            std::stringstream query;
+            query << "INSERT INTO TestDatabase.TestCollection (custom_type_name, oddness) VALUES ";
+            for (int num = 0; num < 100; ++num) {
+                query << "(ROW(" << num << ", '"
+                      << "text_" << num + 1 << "'), " << (num % 2 == 0 ? "\'even\'" : "\'odd\'") << ")"
+                      << (num == 99 ? ";" : ", ");
+            }
+            auto cur = dispatcher->execute_sql(session, query.str());
+            REQUIRE(cur->is_success());
+            REQUIRE(cur->size() == 100);
+        }
+        {
+            auto session = otterbrix::session_id_t();
+            REQUIRE(dispatcher->size(session, database_name, collection_name) == 100);
+        }
+    }
+
+    INFO("find") {
+        {
+            auto session = otterbrix::session_id_t();
+            auto cur = dispatcher->execute_sql(session, "SELECT * FROM TestDatabase.TestCollection;");
+            REQUIRE(cur->is_success());
+            REQUIRE(cur->size() == 100);
+        }
+        /*
+        {
+            auto session = otterbrix::session_id_t();
+            auto cur = dispatcher->execute_sql(session,
+                                               "SELECT * FROM TestDatabase.TestCollection "
+                                               "WHERE custom_type_name.f1 > 90;");
+            REQUIRE(cur->is_success());
+            REQUIRE(cur->size() == 9);
+        }
+        */
     }
 }

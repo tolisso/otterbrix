@@ -36,16 +36,14 @@ TEST_CASE("operator::insert") {
 
 TEST_CASE("operator::full_scan") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = init_collection(&resource);
     auto table = init_table(&resource);
 
     SECTION("find::eq") {
         auto cond =
-            make_compare_expression(&resource, compare_type::eq, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::eq, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -64,9 +62,9 @@ TEST_CASE("operator::full_scan") {
 
     SECTION("find::ne") {
         auto cond =
-            make_compare_expression(&resource, compare_type::ne, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::ne, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -85,9 +83,9 @@ TEST_CASE("operator::full_scan") {
 
     SECTION("find::gt") {
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -106,9 +104,9 @@ TEST_CASE("operator::full_scan") {
 
     SECTION("find::gte") {
         auto cond =
-            make_compare_expression(&resource, compare_type::gte, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gte, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -127,9 +125,9 @@ TEST_CASE("operator::full_scan") {
 
     SECTION("find::lt") {
         auto cond =
-            make_compare_expression(&resource, compare_type::lt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::lt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -148,9 +146,9 @@ TEST_CASE("operator::full_scan") {
 
     SECTION("find::lte") {
         auto cond =
-            make_compare_expression(&resource, compare_type::lte, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::lte, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -169,9 +167,9 @@ TEST_CASE("operator::full_scan") {
 
     SECTION("find_one") {
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -191,8 +189,6 @@ TEST_CASE("operator::full_scan") {
 
 TEST_CASE("operator::delete") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = init_collection(&resource);
     auto table = init_table(&resource);
 
@@ -200,9 +196,9 @@ TEST_CASE("operator::delete") {
         REQUIRE(d(collection)->document_storage().size() == 100);
         REQUIRE(d(table)->table_storage().table().calculate_size() == 100);
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -227,9 +223,9 @@ TEST_CASE("operator::delete") {
         REQUIRE(d(collection)->document_storage().size() == 100);
         REQUIRE(d(table)->table_storage().table().calculate_size() == 100);
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -254,9 +250,9 @@ TEST_CASE("operator::delete") {
         REQUIRE(d(collection)->document_storage().size() == 100);
         REQUIRE(d(table)->table_storage().table().calculate_size() == 100);
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -281,22 +277,20 @@ TEST_CASE("operator::delete") {
 // TODO: find fix for complex keys e.g. "countArray/0"
 TEST_CASE("operator::update") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = init_collection(&resource);
     auto table = init_table(&resource);
 
     SECTION("find::update") {
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
-        add_parameter(parameters, core::parameter_id_t(2), new_value(static_cast<int64_t>(999)));
-        add_parameter(parameters, core::parameter_id_t(3), new_value(static_cast<int64_t>(9999)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(2), types::logical_value_t(static_cast<int64_t>(999)));
+        add_parameter(parameters, core::parameter_id_t(3), types::logical_value_t(static_cast<int64_t>(9999)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         auto cond_check =
-            make_compare_expression(&resource, compare_type::eq, side_t::left, key("count"), core::parameter_id_t(2));
+            make_compare_expression(&resource, compare_type::eq, key("count", side_t::left), core::parameter_id_t(2));
 
         update_expr_ptr script_update_1 = new update_expr_set_t(expressions::key_t{"count"});
         script_update_1->left() = new update_expr_get_const_value_t(core::parameter_id_t(2));
@@ -324,7 +318,7 @@ TEST_CASE("operator::update") {
                                                       logical_plan::limit_t::unlimit());
                 scan.on_execute(&pipeline_context);
                 REQUIRE(scan.output()->size() == 10);
-                REQUIRE(scan.output()->documents().front()->get_value("countArray/0") ==
+                REQUIRE(scan.output()->documents().front()->get_value("countArray/0").as_logical_value() ==
                         pipeline_context.parameters.parameters.at(core::parameter_id_t(3)));
             }
         }
@@ -353,15 +347,15 @@ TEST_CASE("operator::update") {
 
     SECTION("find::update_one") {
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
-        add_parameter(parameters, core::parameter_id_t(2), new_value(static_cast<int64_t>(999)));
-        add_parameter(parameters, core::parameter_id_t(3), new_value(static_cast<int64_t>(9999)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(2), types::logical_value_t(static_cast<int64_t>(999)));
+        add_parameter(parameters, core::parameter_id_t(3), types::logical_value_t(static_cast<int64_t>(9999)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         auto cond_check =
-            make_compare_expression(&resource, compare_type::eq, side_t::left, key("count"), core::parameter_id_t(2));
+            make_compare_expression(&resource, compare_type::eq, key("count", side_t::left), core::parameter_id_t(2));
         update_expr_ptr script_update_1 = new update_expr_set_t(expressions::key_t{"count"});
         script_update_1->left() = new update_expr_get_const_value_t(core::parameter_id_t(2));
         update_expr_ptr script_update_2 = new update_expr_set_t(expressions::key_t{"countArray/0"});
@@ -388,7 +382,7 @@ TEST_CASE("operator::update") {
                                                       logical_plan::limit_t::unlimit());
                 scan.on_execute(&pipeline_context);
                 REQUIRE(scan.output()->size() == 1);
-                REQUIRE(scan.output()->documents().front()->get_value("countArray/0") ==
+                REQUIRE(scan.output()->documents().front()->get_value("countArray/0").as_logical_value() ==
                         pipeline_context.parameters.parameters.at(core::parameter_id_t(3)));
             }
         }
@@ -417,15 +411,15 @@ TEST_CASE("operator::update") {
 
     SECTION("find::update_limit") {
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
-        add_parameter(parameters, core::parameter_id_t(2), new_value(static_cast<int64_t>(999)));
-        add_parameter(parameters, core::parameter_id_t(3), new_value(static_cast<int64_t>(9999)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(2), types::logical_value_t(static_cast<int64_t>(999)));
+        add_parameter(parameters, core::parameter_id_t(3), types::logical_value_t(static_cast<int64_t>(9999)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         auto cond_check =
-            make_compare_expression(&resource, compare_type::eq, side_t::left, key("count"), core::parameter_id_t(2));
+            make_compare_expression(&resource, compare_type::eq, key("count", side_t::left), core::parameter_id_t(2));
         update_expr_ptr script_update_1 = new update_expr_set_t(expressions::key_t{"count"});
         script_update_1->left() = new update_expr_get_const_value_t(core::parameter_id_t(2));
         update_expr_ptr script_update_2 = new update_expr_set_t(expressions::key_t{"countArray/0"});
@@ -486,8 +480,6 @@ TEST_CASE("operator::update") {
 
 TEST_CASE("operator::index_scan") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = create_collection(&resource);
     auto table = create_table(&resource);
 
@@ -500,9 +492,9 @@ TEST_CASE("operator::index_scan") {
 
     SECTION("find::eq") {
         auto cond =
-            make_compare_expression(&resource, compare_type::eq, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::eq, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -519,9 +511,9 @@ TEST_CASE("operator::index_scan") {
 
     SECTION("find::ne") {
         auto cond =
-            make_compare_expression(&resource, compare_type::ne, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::ne, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -538,9 +530,9 @@ TEST_CASE("operator::index_scan") {
 
     SECTION("find::gt") {
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -557,9 +549,9 @@ TEST_CASE("operator::index_scan") {
 
     SECTION("find::gte") {
         auto cond =
-            make_compare_expression(&resource, compare_type::gte, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gte, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -576,9 +568,9 @@ TEST_CASE("operator::index_scan") {
 
     SECTION("find::lt") {
         auto cond =
-            make_compare_expression(&resource, compare_type::lt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::lt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -595,9 +587,9 @@ TEST_CASE("operator::index_scan") {
 
     SECTION("find::lte") {
         auto cond =
-            make_compare_expression(&resource, compare_type::lte, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::lte, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -614,9 +606,9 @@ TEST_CASE("operator::index_scan") {
 
     SECTION("find_one") {
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -633,9 +625,9 @@ TEST_CASE("operator::index_scan") {
 
     SECTION("find_limit") {
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(90)));
+        add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(90)));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -698,8 +690,6 @@ TEST_CASE("operator::transfer_scan") {
 
 TEST_CASE("operator::index::delete_and_update") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = create_collection(&resource);
     auto table = create_table(&resource);
 
@@ -712,9 +702,9 @@ TEST_CASE("operator::index::delete_and_update") {
 
     SECTION("index_scan after delete") {
         auto cond_check =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters_check(&resource);
-        add_parameter(parameters_check, core::parameter_id_t(1), new_value(static_cast<int64_t>(50)));
+        add_parameter(parameters_check, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(50)));
         pipeline::context_t pipeline_context_check(std::move(parameters_check));
 
         SECTION("documents") {
@@ -726,11 +716,10 @@ TEST_CASE("operator::index::delete_and_update") {
             {
                 auto cond = make_compare_expression(&resource,
                                                     compare_type::gt,
-                                                    side_t::left,
-                                                    key("count"),
+                                                    key("count", side_t::left),
                                                     core::parameter_id_t(1));
                 logical_plan::storage_parameters parameters(&resource);
-                add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(60)));
+                add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(60)));
                 pipeline::context_t pipeline_context(std::move(parameters));
                 collection::operators::operator_delete delete_(d(collection));
                 delete_.set_children(boost::intrusive_ptr(
@@ -752,11 +741,10 @@ TEST_CASE("operator::index::delete_and_update") {
             {
                 auto cond = make_compare_expression(&resource,
                                                     compare_type::gt,
-                                                    side_t::left,
-                                                    key("count"),
+                                                    key("count", side_t::left),
                                                     core::parameter_id_t(1));
                 logical_plan::storage_parameters parameters(&resource);
-                add_parameter(parameters, core::parameter_id_t(1), new_value(static_cast<int64_t>(60)));
+                add_parameter(parameters, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(60)));
                 pipeline::context_t pipeline_context(std::move(parameters));
                 table::operators::operator_delete delete_(d(table));
                 delete_.set_children(boost::intrusive_ptr(
@@ -773,10 +761,10 @@ TEST_CASE("operator::index::delete_and_update") {
 
     SECTION("index_scan after update") {
         auto cond_check =
-            make_compare_expression(&resource, compare_type::eq, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::eq, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters_check(&resource);
-        add_parameter(parameters_check, core::parameter_id_t(1), new_value(static_cast<int64_t>(50)));
-        add_parameter(parameters_check, core::parameter_id_t(2), new_value(static_cast<int64_t>(0)));
+        add_parameter(parameters_check, core::parameter_id_t(1), types::logical_value_t(static_cast<int64_t>(50)));
+        add_parameter(parameters_check, core::parameter_id_t(2), types::logical_value_t(static_cast<int64_t>(0)));
         pipeline::context_t pipeline_context_check(std::move(parameters_check));
 
         SECTION("documents") {

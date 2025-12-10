@@ -17,14 +17,13 @@
 #include <components/types/operations_helper.hpp>
 
 using namespace components;
+using namespace components::types;
 using namespace components::expressions;
 using key = components::expressions::key_t;
 using components::logical_plan::add_parameter;
 
 TEST_CASE("operator::aggregate::count") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = init_collection(&resource);
     auto table = init_table(&resource);
 
@@ -51,9 +50,9 @@ TEST_CASE("operator::aggregate::count") {
 
     SECTION("count::match") {
         auto cond =
-            make_compare_expression(&resource, compare_type::lte, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::lte, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(10));
+        add_parameter(parameters, core::parameter_id_t(1), logical_value_t(10));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -77,8 +76,6 @@ TEST_CASE("operator::aggregate::count") {
 
 TEST_CASE("operator::aggregate::min") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = init_collection(&resource);
     auto table = init_table(&resource);
 
@@ -105,9 +102,9 @@ TEST_CASE("operator::aggregate::min") {
 
     SECTION("min::match") {
         auto cond =
-            make_compare_expression(&resource, compare_type::gt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::gt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(80));
+        add_parameter(parameters, core::parameter_id_t(1), logical_value_t(80));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -131,8 +128,6 @@ TEST_CASE("operator::aggregate::min") {
 
 TEST_CASE("operator::aggregate::max") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = init_collection(&resource);
     auto table = init_table(&resource);
 
@@ -159,9 +154,9 @@ TEST_CASE("operator::aggregate::max") {
 
     SECTION("max::match") {
         auto cond =
-            make_compare_expression(&resource, compare_type::lt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::lt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(20));
+        add_parameter(parameters, core::parameter_id_t(1), logical_value_t(20));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -185,8 +180,6 @@ TEST_CASE("operator::aggregate::max") {
 
 TEST_CASE("operator::aggregate::sum") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = init_collection(&resource);
     auto table = init_table(&resource);
 
@@ -213,9 +206,9 @@ TEST_CASE("operator::aggregate::sum") {
 
     SECTION("sum::match") {
         auto cond =
-            make_compare_expression(&resource, compare_type::lt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::lt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(10));
+        add_parameter(parameters, core::parameter_id_t(1), logical_value_t(10));
         pipeline::context_t pipeline_context(std::move(parameters));
 
         SECTION("documents") {
@@ -239,8 +232,6 @@ TEST_CASE("operator::aggregate::sum") {
 
 TEST_CASE("operator::aggregate::avg") {
     auto resource = std::pmr::synchronized_pool_resource();
-    auto tape = std::make_unique<impl::base_document>(&resource);
-    auto new_value = [&](auto value) { return value_t{tape.get(), value}; };
     auto collection = init_collection(&resource);
     auto table = init_table(&resource);
 
@@ -267,9 +258,9 @@ TEST_CASE("operator::aggregate::avg") {
 
     SECTION("avg::match") {
         auto cond =
-            make_compare_expression(&resource, compare_type::lt, side_t::left, key("count"), core::parameter_id_t(1));
+            make_compare_expression(&resource, compare_type::lt, key("count", side_t::left), core::parameter_id_t(1));
         logical_plan::storage_parameters parameters(&resource);
-        add_parameter(parameters, core::parameter_id_t(1), new_value(10));
+        add_parameter(parameters, core::parameter_id_t(1), logical_value_t(10));
         pipeline::context_t pipeline_context(std::move(parameters));
         SECTION("documents") {
             collection::operators::aggregate::operator_avg_t avg_(d(collection), key("count"));
