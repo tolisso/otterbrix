@@ -146,76 +146,27 @@ namespace components::document_table {
     }
 
     void document_table_storage_t::evolve_schema(const std::pmr::vector<column_info_t>& new_columns) {
-        // Получаем новую полную схему
-        auto new_column_defs = schema_->to_column_definitions();
-
-        // Создаем новую таблицу
-        auto new_table =
-            std::make_unique<table::data_table_t>(resource_, block_manager_, std::move(new_column_defs));
-
-        // Копируем существующие данные только если есть документы
-        // Используем size() вместо calculate_size() чтобы избежать проблем с пустой таблицей
-        if (table_ && size() > 0) {
-            migrate_data(table_.get(), new_table.get(), new_columns);
+        // Инкрементально добавляем новые колонки
+        // Используем конструктор data_table_t(parent, new_column) который переиспользует
+        // существующие row_groups через shared_ptr (O(1) вместо O(N))
+        
+        for (const auto& col_info : new_columns) {
+            // Создаем NULL default значение для новой колонки с правильным типом
+            // Если колонка nullable (union с NULL), создаем значение того же union типа
+            auto default_value = std::make_unique<types::logical_value_t>(col_info.type);
+            
+            // Создаем column_definition для новой колонки с default значением
+            table::column_definition_t new_column_def(col_info.json_path, col_info.type, std::move(default_value));
+            
+            // Создаем новую таблицу, добавляя одну колонку к существующей
+            // Это НЕ копирует данные - только переиспользует row_groups через shared_ptr
+            auto new_table = std::make_unique<table::data_table_t>(*table_, new_column_def);
+            
+            // Заменяем старую таблицу новой
+            table_ = std::move(new_table);
         }
-
-        // Заменяем старую таблицу новой
-        table_ = std::move(new_table);
     }
 
-    void document_table_storage_t::migrate_data(table::data_table_t* old_table,
-                                                table::data_table_t* new_table,
-                                                const std::pmr::vector<column_info_t>& new_columns) {
-        // Сканируем старую таблицу
-        table::table_scan_state scan_state(resource_);
-
-        // Получаем все колонки из старой таблицы
-        std::vector<table::storage_index_t> old_column_ids;
-        for (uint64_t i = 0; i < old_table->column_count(); ++i) {
-            old_column_ids.push_back(table::storage_index_t(i));
-        }
-
-        old_table->initialize_scan(scan_state, old_column_ids);
-
-        // Подготавливаем append в новую таблицу
-        table::table_append_state append_state(resource_);
-        new_table->append_lock(append_state);
-        new_table->initialize_append(append_state);
-
-        // Читаем и копируем данные чанками
-        while (true) {
-            vector::data_chunk_t old_chunk(resource_, old_table->copy_types());
-            old_table->scan(old_chunk, scan_state);
-
-            if (old_chunk.size() == 0) {
-                break; // Данные закончились
-            }
-
-            // Создаем новый chunk с расширенной схемой
-            vector::data_chunk_t new_chunk(resource_, new_table->copy_types());
-            new_chunk.set_cardinality(old_chunk.size());
-
-            // Копируем существующие колонки
-            for (size_t i = 0; i < old_table->column_count(); ++i) {
-                new_chunk.data[i] = std::move(old_chunk.data[i]);
-            }
-
-            // Заполняем новые колонки NULL значениями
-            for (size_t i = old_table->column_count(); i < new_table->column_count(); ++i) {
-                auto& vec = new_chunk.data[i];
-                // Вектор уже создан с правильным типом в new_chunk
-                // Просто устанавливаем NULL для всех строк
-                for (uint64_t row = 0; row < old_chunk.size(); ++row) {
-                    vec.set_null(row, true);
-                }
-            }
-
-            // Вставляем в новую таблицу
-            new_table->append(new_chunk, append_state);
-        }
-
-        new_table->finalize_append(append_state);
-    }
 
     vector::data_chunk_t document_table_storage_t::document_to_row(const document::document_ptr& doc) {
         // Создаем chunk на одну строку

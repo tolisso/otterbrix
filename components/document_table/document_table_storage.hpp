@@ -64,13 +64,8 @@ namespace components::document_table {
         // Проверка, нужна ли эволюция схемы
         bool needs_evolution(const document::document_ptr& doc) const;
 
-        // Эволюция схемы и пересоздание таблицы
+        // Эволюция схемы (инкрементальное добавление колонок)
         void evolve_schema(const std::pmr::vector<column_info_t>& new_columns);
-
-        // Миграция данных при расширении схемы
-        void migrate_data(table::data_table_t* old_table,
-                          table::data_table_t* new_table,
-                          const std::pmr::vector<column_info_t>& new_columns);
 
         // Конвертация документа в row согласно текущей схеме
         vector::data_chunk_t document_to_row(const document::document_ptr& doc);
