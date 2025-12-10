@@ -48,12 +48,12 @@ namespace components::document_table::operators {
                     throw std::runtime_error("unsupported compare_type in expression to filter conversion");
                 default: {
                     auto it = std::find_if(types.begin(), types.end(), [&](const types::complex_logical_type& type) {
-                        return type.alias() == expression->key_left().as_string();
+                        return type.alias() == expression->primary_key().as_string();
                     });
                     assert(it != types.end());
                     return std::make_unique<table::constant_filter_t>(
                         expression->type(),
-                        parameters->parameters.at(expression->value()).as_logical_value(),
+                        parameters->parameters.at(expression->value()),  // Already logical_value_t
                         it - types.begin());
                 }
             }

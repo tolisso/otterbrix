@@ -31,7 +31,7 @@ namespace services::document_table::planner::impl {
                        components::logical_plan::limit_t limit) {
         // Реализация primary_key_scan для быстрого findOne по _id
         if (expr && is_can_primary_key_find_by_predicate(expr->type()) && 
-            expr->key_left().as_string() == "_id") {
+            expr->primary_key().as_string() == "_id") {
             // Создаем primary_key_scan оператор с expression
             // Значение _id будет извлечено из expression во время выполнения
             return boost::intrusive_ptr(

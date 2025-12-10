@@ -264,13 +264,11 @@ namespace components::types {
             case logical_type::ARRAY:
                 return physical_type::ARRAY;
             case logical_type::STRUCT:
-            case logical_type::UNION:
             case logical_type::VARIANT:
-                return physical_type::STRUCT;
+            case logical_type::UNION:
+                return physical_type::STRUCT;  // UNION uses STRUCT infrastructure with sub-columns
             case logical_type::LIST:
                 return physical_type::LIST;
-            case logical_type::UNION:
-                return physical_type::UNION;
             default:
                 return physical_type::INVALID;
         }

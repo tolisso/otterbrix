@@ -36,7 +36,7 @@ namespace components::document_table::operators {
             auto& params = pipeline_context->parameters;
             auto it = params.parameters.find(expression_->value());
             if (it != params.parameters.end()) {
-                auto value = it->second.as_logical_value();
+                const auto& value = it->second;  // Already logical_value_t
                 
                 // Convert value to document_id_t
                 if (value.type().type() == types::logical_type::STRING_LITERAL) {
