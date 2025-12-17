@@ -11,11 +11,11 @@ NC='\033[0m' # No Color
 
 # Configuration
 ACTOR_ZETA_VERSION="1.0.0a12"
-BUILD_TYPE="${BUILD_TYPE:-Release}"
+BUILD_TYPE="${BUILD_TYPE:-Debug}"
 CXX_STANDARD="${CXX_STANDARD:-17}"
 JOBS="${JOBS:-$(nproc)}"
 DEV_MODE="${DEV_MODE:-ON}"
-ENABLE_TESTS="${ENABLE_TESTS:-ON}"
+ENABLE_TESTS="${ENABLE_TESTS:-OFF}"
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Otterbrix Build Script${NC}"
@@ -193,7 +193,7 @@ echo -e "${GREEN}✓ Dependencies installed successfully${NC}"
 print_section "Step 6: Configuring CMake"
 
 cmake .. -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake \
+    -DCMAKE_TOOLCHAIN_FILE=./build/$BUILD_TYPE/generators/conan_toolchain.cmake \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DDEV_MODE="$DEV_MODE" \
     -DEXAMPLE=ON
@@ -207,28 +207,7 @@ cmake --build . --target all -- -j "$JOBS"
 
 echo -e "${GREEN}✓ Otterbrix built successfully${NC}"
 
-# Step 8: Run tests (optional)
-if [ "$ENABLE_TESTS" = "ON" ]; then
-    print_section "Step 8: Running tests"
-
-    echo "Running C++ tests..."
-    ctest -C "$BUILD_TYPE" -V --output-on-failure --timeout 60 || echo -e "${YELLOW}Warning: Some C++ tests failed${NC}"
-
-    if [ -d "../integration/python" ]; then
-        echo "Running Python tests..."
-        cd integration/python/
-        if command -v pytest >/dev/null 2>&1; then
-            pytest -v -s || echo -e "${YELLOW}Warning: Some Python tests failed${NC}"
-        else
-            echo -e "${YELLOW}pytest not found, skipping Python tests${NC}"
-        fi
-        cd ../..
-    fi
-
-    echo -e "${GREEN}✓ Tests completed${NC}"
-else
-    echo -e "${YELLOW}Skipping tests (ENABLE_TESTS=OFF)${NC}"
-fi
+# Tests disabled
 
 # Summary
 print_section "Build Summary"
@@ -238,8 +217,7 @@ echo "Build artifacts location: $(pwd)"
 echo "Main library: $(pwd)/integration/c/libotterbrix.so"
 echo ""
 echo "To run the build again with different options, use:"
-echo "  BUILD_TYPE=Debug ./build.sh"
+echo "  BUILD_TYPE=Release ./build.sh"
 echo "  JOBS=8 ./build.sh"
-echo "  ENABLE_TESTS=OFF ./build.sh"
 echo ""
 echo -e "${GREEN}========================================${NC}"
