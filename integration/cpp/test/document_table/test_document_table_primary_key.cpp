@@ -1,4 +1,4 @@
-#include "test_config.hpp"
+#include "../test_config.hpp"
 #include <catch2/catch.hpp>
 #include <chrono>
 #include <set>

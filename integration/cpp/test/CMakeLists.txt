@@ -7,14 +7,15 @@ set( ${PROJECT_NAME}_SOURCES
         test_collection.cpp
         test_collection_logical_plan.cpp
         test_collection_sql.cpp
-        test_document_table_sql.cpp
-        test_document_table_primary_key.cpp
         test_save_load.cpp
         test_index.cpp
         test_join.cpp
         test_connections.cpp
-        test_jsonbench.cpp
-        test_jsonbench_separate.cpp
+        test_union_types.cpp
+        document_table/test_document_table_sql.cpp
+        document_table/test_document_table_primary_key.cpp
+        document_table/test_jsonbench.cpp
+        document_table/test_jsonbench_separate.cpp
 )
 
 add_executable(${PROJECT_NAME} main.cpp ${${PROJECT_NAME}_SOURCES})
