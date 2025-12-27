@@ -257,9 +257,8 @@ namespace components::document_table {
                 break;
 
             case types::logical_type::UNION:
-                // ВРЕМЕННОЕ РЕШЕНИЕ: для UNION колонок сохраняем данные в их фактическом типе
-                // Schema отслеживает что колонка может содержать разные типы
-                if (col_info->is_union) {
+                // Создаем настоящие UNION значения
+                if (col_info->is_union && !col_info->union_types.empty()) {
                     // Определяем фактический тип значения в документе
                     auto actual_type = detect_value_type_in_document(doc, col_info->json_path);
 
@@ -268,13 +267,39 @@ namespace components::document_table {
                         break;
                     }
 
-                    // Извлекаем значение нужного типа и сохраняем напрямую
-                    auto value = extract_value_from_document(doc, col_info->json_path, actual_type);
+                    // Получаем tag для этого типа в union
+                    uint8_t tag = 0;
+                    try {
+                        tag = schema_->get_union_tag(col_info, actual_type);
+                    } catch (const std::exception&) {
+                        // Тип не найден в union - устанавливаем NULL
+                        vec.set_null(0, true);
+                        break;
+                    }
 
-                    if (value.is_null()) {
+                    // Извлекаем фактическое значение
+                    auto actual_value = extract_value_from_document(doc, col_info->json_path, actual_type);
+
+                    if (actual_value.is_null()) {
                         vec.set_null(0, true);
                     } else {
-                        vec.set_value(0, std::move(value));
+                        // Создаем union_fields из типов колонки
+                        std::vector<types::complex_logical_type> union_fields;
+                        for (auto utype : col_info->union_types) {
+                            std::string type_name;
+                            switch (utype) {
+                                case types::logical_type::STRING_LITERAL: type_name = "string"; break;
+                                case types::logical_type::BIGINT: type_name = "int64"; break;
+                                case types::logical_type::DOUBLE: type_name = "double"; break;
+                                case types::logical_type::BOOLEAN: type_name = "bool"; break;
+                                default: type_name = "unknown"; break;
+                            }
+                            union_fields.emplace_back(utype, type_name);
+                        }
+
+                        // Создаем union значение
+                        auto union_value = types::logical_value_t::create_union(union_fields, tag, actual_value);
+                        vec.set_value(0, std::move(union_value));
                     }
                 } else {
                     vec.set_null(0, true);
@@ -322,6 +347,51 @@ namespace components::document_table {
             
             // Устанавливаем значение в зависимости от типа
             switch (value.type().type()) {
+            case types::logical_type::UNION: {
+                // Извлекаем значение из union
+                const auto& children = value.children();
+                if (children.empty()) {
+                    break; // Пустой union, пропускаем
+                }
+
+                // Первый child - это tag
+                uint8_t tag = children[0].value<uint8_t>();
+
+                // Находим фактическое значение (не NULL child после tag)
+                // children[0] = tag
+                // children[1] = первый тип union
+                // children[2] = второй тип union
+                // и т.д.
+                // Индекс фактического значения = tag + 1
+                size_t value_index = tag + 1;
+                if (value_index >= children.size()) {
+                    break; // Некорректный tag
+                }
+
+                const auto& actual_value = children[value_index];
+                if (actual_value.is_null()) {
+                    break; // Значение NULL
+                }
+
+                // Устанавливаем значение в документ в зависимости от его типа
+                switch (actual_value.type().type()) {
+                    case types::logical_type::BOOLEAN:
+                        doc->set(doc_path, actual_value.value<bool>());
+                        break;
+                    case types::logical_type::BIGINT:
+                        doc->set(doc_path, actual_value.value<int64_t>());
+                        break;
+                    case types::logical_type::DOUBLE:
+                        doc->set(doc_path, actual_value.value<double>());
+                        break;
+                    case types::logical_type::STRING_LITERAL:
+                        doc->set(doc_path, std::string(actual_value.value<std::string_view>()));
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            }
             case types::logical_type::BOOLEAN:
                 doc->set(doc_path, value.value<bool>());
                 break;

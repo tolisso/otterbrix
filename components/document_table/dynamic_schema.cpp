@@ -3,13 +3,24 @@
 
 namespace components::document_table {
 
+    // Helper: создать стандартный UNION тип для всех колонок
+    static types::complex_logical_type create_standard_union_type(const std::string& name) {
+        std::vector<types::complex_logical_type> union_fields;
+        union_fields.emplace_back(types::logical_type::STRING_LITERAL, "string");
+        union_fields.emplace_back(types::logical_type::BIGINT, "int64");
+        union_fields.emplace_back(types::logical_type::DOUBLE, "double");
+        union_fields.emplace_back(types::logical_type::BOOLEAN, "bool");
+        auto union_type = types::complex_logical_type::create_union(union_fields, name);
+        return union_type;
+    }
+
     dynamic_schema_t::dynamic_schema_t(std::pmr::memory_resource* resource)
         : resource_(resource)
         , columns_(resource)
         , path_to_index_(resource)
         , extractor_(std::make_unique<json_path_extractor_t>(resource)) {
 
-        // Всегда добавляем служебную колонку для document_id
+        // Всегда добавляем служебную колонку для document_id (STRING, не union)
         types::complex_logical_type id_type(types::logical_type::STRING_LITERAL);
         id_type.set_alias("_id");
         add_column("_id", id_type);
@@ -51,7 +62,17 @@ namespace components::document_table {
         new_col.column_index = new_index;
         new_col.is_array_element = is_array_element;
         new_col.array_index = array_index;
-        
+
+        // Если это UNION тип, заполняем union_types и устанавливаем флаг
+        if (type.type() == types::logical_type::UNION) {
+            new_col.is_union = true;
+            // Извлекаем типы из union
+            const auto& children = type.children();
+            for (const auto& child : children) {
+                new_col.union_types.push_back(child.type());
+            }
+        }
+
         columns_.push_back(std::move(new_col));
 
         // Обновляем маппинг
@@ -80,40 +101,21 @@ namespace components::document_table {
             return new_columns;
         }
 
-        // Извлекаем все пути из документа с типами
-        auto extracted_paths = extractor_->extract_paths(doc);
+        // Извлекаем только имена полей (типы не нужны, все колонки - union)
+        auto field_names = extractor_->extract_field_names(doc);
 
         // Проходим по всем путям
-        for (const auto& path_info : extracted_paths) {
-            // Если путь уже существует, проверяем совместимость типов
-            if (has_path(path_info.path)) {
-                const auto* existing_col = get_column_info(path_info.path);
-                if (existing_col) {
-                    auto existing_type = existing_col->type.type();
-                    auto new_type = path_info.type;
-
-                    // Проверяем, что типы совпадают
-                    if (existing_type != new_type) {
-                        // UNION SUPPORT: вместо ошибки, создаем/расширяем union
-                        if (existing_col->is_union) {
-                            // Уже union - добавить новый тип если его нет
-                            extend_union_column(path_info.path, new_type);
-                        } else {
-                            // Первое несовпадение - создать union из двух типов
-                            create_union_column(path_info.path, existing_type, new_type);
-                        }
-                        // Схема изменилась - возвращаем обновленную колонку
-                        new_columns.push_back(*get_column_info(path_info.path));
-                    }
-                }
+        for (const auto& path : field_names) {
+            // Если путь уже существует, ничего не делаем (все колонки - union, конфликтов нет)
+            if (has_path(path)) {
                 continue;
             }
 
-            // Создаем новую колонку с определенным типом
-            types::complex_logical_type col_type(path_info.type);
-            col_type.set_alias(path_info.path);
+            // Создаем новую колонку как стандартный UNION тип
+            auto col_type = create_standard_union_type(path);
+            col_type.set_alias(path);
 
-            add_column(path_info.path, col_type, path_info.is_array, path_info.array_index);
+            add_column(path, col_type, false, 0);
 
             // Запоминаем, что это новая колонка
             new_columns.push_back(columns_.back());
@@ -125,38 +127,13 @@ namespace components::document_table {
     void dynamic_schema_t::create_union_column(const std::string& json_path,
                                                types::logical_type type1,
                                                types::logical_type type2) {
-        auto it = path_to_index_.find(json_path);
-        if (it == path_to_index_.end()) {
-            return;
-        }
-
-        auto& col = columns_[it->second];
-
-        // ВРЕМЕННОЕ РЕШЕНИЕ: вместо создания UNION type, оставляем первый тип
-        // col.type уже установлен как type1, не меняем его
-        col.is_union = true;
-        col.union_types.clear();
-        col.union_types.push_back(type1);
-        col.union_types.push_back(type2);
+        // Метод больше не используется - все колонки создаются как union сразу
+        // Оставляем для обратной совместимости
     }
 
     void dynamic_schema_t::extend_union_column(const std::string& json_path, types::logical_type new_type) {
-        auto it = path_to_index_.find(json_path);
-        if (it == path_to_index_.end()) {
-            return;
-        }
-
-        auto& col = columns_[it->second];
-
-        // Проверяем, что тип еще не в union
-        if (std::find(col.union_types.begin(), col.union_types.end(), new_type) != col.union_types.end()) {
-            return; // Уже есть
-        }
-
-        // Добавляем новый тип в union
-        col.union_types.push_back(new_type);
-
-        // ВРЕМЕННОЕ РЕШЕНИЕ: не меняем col.type, оставляем первый тип
+        // Метод больше не используется - все колонки создаются как union сразу
+        // Оставляем для обратной совместимости
     }
 
     uint8_t dynamic_schema_t::get_union_tag(const column_info_t* col, types::logical_type type) const {
