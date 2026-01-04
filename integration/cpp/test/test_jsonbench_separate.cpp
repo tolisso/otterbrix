@@ -175,7 +175,7 @@ void print_comparison(const std::string& test_name,
 } // anonymous namespace
 
 TEST_CASE("JSONBench 0: INSERT Performance", "[jsonbench][insert]") {
-    std::string data_path = "test_sample_1000.json";
+    std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_1000.json";
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
     
