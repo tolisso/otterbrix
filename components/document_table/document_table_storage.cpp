@@ -520,14 +520,14 @@ namespace components::document_table {
             }
         }
 
-        // Шаг 2: Создаем таблицу нужного размера с батчами по 1000 документов
-        constexpr size_t BATCH_SIZE = 1000;
+        // Шаг 2: Создаем таблицу нужного размера с батчами по 1024 документов (оптимальный размер для vector capacity)
+        constexpr size_t BATCH_SIZE = 1024;
 
         for (size_t batch_start = 0; batch_start < documents.size(); batch_start += BATCH_SIZE) {
             size_t batch_end = std::min(batch_start + BATCH_SIZE, documents.size());
             size_t batch_count = batch_end - batch_start;
 
-            // Создаем chunk на весь батч
+            // Создаем chunk на батч (умещается в DEFAULT_VECTOR_CAPACITY = 1024)
             auto types = table_->copy_types();
             vector::data_chunk_t batch_chunk(resource_, types);
             batch_chunk.set_cardinality(batch_count);
