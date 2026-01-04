@@ -29,6 +29,9 @@ namespace components::document_table {
         // Вставка документа с автоматической эволюцией схемы
         void insert(const document::document_id_t& id, const document::document_ptr& doc);
 
+        // Batch вставка документов с оптимизацией
+        void batch_insert(const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents);
+
         // Получение документа по ID
         document::document_ptr get(const document::document_id_t& id);
 
@@ -77,9 +80,13 @@ namespace components::document_table {
         types::logical_value_t extract_value_from_document(const document::document_ptr& doc,
                                                            const std::string& json_path,
                                                            types::logical_type expected_type);
-        
+
         types::logical_type detect_value_type_in_document(const document::document_ptr& doc,
                                                           const std::string& json_path);
+
+        // Получение Map: path -> value для документа
+        std::pmr::unordered_map<std::string, types::logical_value_t>
+        extract_path_values(const document::document_ptr& doc);
 
         std::pmr::memory_resource* resource_;
         table::storage::block_manager_t& block_manager_;

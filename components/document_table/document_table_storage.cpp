@@ -407,7 +407,7 @@ namespace components::document_table {
         types::logical_type expected_type) {
 
         std::string doc_path = column_name_to_document_path(json_path);
-        
+
         if (!doc || !doc->is_exists(doc_path)) {
             return types::logical_value_t(); // null value
         }
@@ -463,6 +463,125 @@ namespace components::document_table {
 
         // Если тип не совпал, возвращаем null
         return types::logical_value_t();
+    }
+
+    std::pmr::unordered_map<std::string, types::logical_value_t>
+    document_table_storage_t::extract_path_values(const document::document_ptr& doc) {
+        std::pmr::unordered_map<std::string, types::logical_value_t> result(resource_);
+
+        if (!doc || !doc->is_valid()) {
+            return result;
+        }
+
+        // Извлекаем все пути из документа
+        auto extracted_paths = schema_->extractor().extract_paths(doc);
+
+        // Для каждого пути извлекаем значение
+        for (const auto& path_info : extracted_paths) {
+            std::string doc_path = column_name_to_document_path(path_info.path);
+
+            if (!doc->is_exists(doc_path)) {
+                result[path_info.path] = types::logical_value_t(); // NULL value
+                continue;
+            }
+
+            // Определяем фактический тип значения
+            auto actual_type = detect_value_type_in_document(doc, path_info.path);
+
+            if (actual_type == types::logical_type::NA) {
+                result[path_info.path] = types::logical_value_t(); // NULL value
+                continue;
+            }
+
+            // Извлекаем значение
+            auto value = extract_value_from_document(doc, path_info.path, actual_type);
+            result[path_info.path] = std::move(value);
+        }
+
+        return result;
+    }
+
+    void document_table_storage_t::batch_insert(
+        const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents) {
+
+        if (documents.empty()) {
+            return;
+        }
+
+        // Шаг 1: Вычисляем все пути из всех документов и эволюционируем схему
+        for (const auto& [id, doc] : documents) {
+            if (!doc || !doc->is_valid()) {
+                continue;
+            }
+
+            auto new_columns = schema_->evolve(doc);
+            if (!new_columns.empty()) {
+                evolve_schema(new_columns);
+            }
+        }
+
+        // Шаг 2: Создаем таблицу нужного размера с батчами по 1000 документов
+        constexpr size_t BATCH_SIZE = 1000;
+
+        for (size_t batch_start = 0; batch_start < documents.size(); batch_start += BATCH_SIZE) {
+            size_t batch_end = std::min(batch_start + BATCH_SIZE, documents.size());
+            size_t batch_count = batch_end - batch_start;
+
+            // Создаем chunk на весь батч
+            auto types = table_->copy_types();
+            vector::data_chunk_t batch_chunk(resource_, types);
+            batch_chunk.set_cardinality(batch_count);
+
+            // Шаг 3: Заполняем батч данными
+            for (size_t batch_idx = 0; batch_idx < batch_count; ++batch_idx) {
+                const auto& [id, doc] = documents[batch_start + batch_idx];
+
+                if (!doc || !doc->is_valid()) {
+                    // Заполняем всю строку NULL значениями
+                    for (size_t col_idx = 0; col_idx < schema_->column_count(); ++col_idx) {
+                        batch_chunk.data[col_idx].set_null(batch_idx, true);
+                    }
+                    continue;
+                }
+
+                // Извлекаем все значения для документа
+                auto path_values = extract_path_values(doc);
+
+                // Проходим по всем колонкам схемы и заполняем значения
+                for (size_t col_idx = 0; col_idx < schema_->column_count(); ++col_idx) {
+                    const auto* col_info = schema_->get_column_by_index(col_idx);
+                    auto& vec = batch_chunk.data[col_idx];
+
+                    // Специальная обработка для _id
+                    if (col_info->json_path == "_id") {
+                        std::string id_str(reinterpret_cast<const char*>(id.data()), id.size);
+                        vec.set_value(batch_idx, types::logical_value_t(id_str));
+                        continue;
+                    }
+
+                    // Ищем значение в извлеченных данных
+                    auto it = path_values.find(col_info->json_path);
+                    if (it != path_values.end() && !it->second.is_null()) {
+                        vec.set_value(batch_idx, it->second);
+                    } else {
+                        vec.set_null(batch_idx, true);
+                    }
+                }
+            }
+
+            // Шаг 4: Вставляем батч в таблицу
+            table::table_append_state state(resource_);
+            table_->append_lock(state);
+            table_->initialize_append(state);
+            table_->append(batch_chunk, state);
+            table_->finalize_append(state);
+
+            // Шаг 5: Сохраняем маппинг для всех документов в батче
+            for (size_t batch_idx = 0; batch_idx < batch_count; ++batch_idx) {
+                const auto& [id, doc] = documents[batch_start + batch_idx];
+                id_to_row_[id] = next_row_id_++;
+            }
+        }
     }
 
 } // namespace components::document_table
