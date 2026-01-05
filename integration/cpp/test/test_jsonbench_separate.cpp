@@ -20,6 +20,8 @@ namespace types = components::types;
 
 namespace {
 
+std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_10000.json";
+
 // Helper to read NDJSON file
 std::vector<std::string> read_ndjson_file(const std::string& filepath) {
     std::vector<std::string> lines;
@@ -179,7 +181,6 @@ void print_comparison(const std::string& test_name,
 } // anonymous namespace
 
 TEST_CASE("JSONBench 0a: BATCH INSERT Performance", "[jsonbench][batch_insert]") {
-    std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_10000.json";
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
 
@@ -244,7 +245,6 @@ TEST_CASE("JSONBench 0a: BATCH INSERT Performance", "[jsonbench][batch_insert]")
 }
 
 TEST_CASE("JSONBench 0: INSERT Performance", "[jsonbench][insert]") {
-    std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_1000.json";
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
 
@@ -368,7 +368,6 @@ TEST_CASE("JSONBench 0: INSERT Performance", "[jsonbench][insert]") {
 }
 
 TEST_CASE("JSONBench Q1: Top event types", "[jsonbench][q1]") {
-    std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_1000.json";
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
     
@@ -398,7 +397,6 @@ TEST_CASE("JSONBench Q1: Top event types", "[jsonbench][q1]") {
 }
 
 TEST_CASE("JSONBench Q2: Event types with unique users", "[jsonbench][q2]") {
-    std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_1000.json";
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
     
@@ -432,7 +430,6 @@ TEST_CASE("JSONBench Q2: Event types with unique users", "[jsonbench][q2]") {
 }
 
 TEST_CASE("JSONBench Q3: When do people use BlueSky (simplified)", "[jsonbench][q3]") {
-    std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_1000.json";
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
     
@@ -468,7 +465,6 @@ TEST_CASE("JSONBench Q3: When do people use BlueSky (simplified)", "[jsonbench][
 }
 
 TEST_CASE("JSONBench Q4: First 3 users to post", "[jsonbench][q4]") {
-    std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_1000.json";
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
     
@@ -504,7 +500,6 @@ TEST_CASE("JSONBench Q4: First 3 users to post", "[jsonbench][q4]") {
 }
 
 TEST_CASE("JSONBench Q5: Top 3 users with longest activity", "[jsonbench][q5]") {
-    std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_1000.json";
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
     
