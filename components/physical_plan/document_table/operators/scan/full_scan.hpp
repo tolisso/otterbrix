@@ -4,6 +4,8 @@
 #include <components/physical_plan/base/operators/operator.hpp>
 #include <components/table/column_state.hpp>
 #include <expressions/compare_expression.hpp>
+#include <vector>
+#include <string>
 
 namespace components::document_table::operators {
 
@@ -13,11 +15,15 @@ namespace components::document_table::operators {
                   const expressions::compare_expression_ptr& expression,
                   logical_plan::limit_t limit);
 
+        // Set projection - list of column names to read (empty = all columns)
+        void set_projection(std::vector<std::string> columns);
+
     private:
         void on_execute_impl(pipeline::context_t* pipeline_context) final;
 
         expressions::compare_expression_ptr expression_;
         const logical_plan::limit_t limit_;
+        std::vector<std::string> projection_columns_;  // Empty = all columns
     };
 
 } // namespace components::document_table::operators

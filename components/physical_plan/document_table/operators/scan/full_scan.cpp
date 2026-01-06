@@ -69,18 +69,47 @@ namespace components::document_table::operators {
         , expression_(expression)
         , limit_(limit) {}
 
+    void full_scan::set_projection(std::vector<std::string> columns) {
+        projection_columns_ = std::move(columns);
+    }
+
     void full_scan::on_execute_impl(pipeline::context_t* pipeline_context) {
         auto t_start = std::chrono::high_resolution_clock::now();
 
         // Get storage and schema
         auto& storage = context_->document_table_storage().storage();
 
-        // Get column types from schema - convert to complex_logical_type
+        // Get column definitions from schema
         auto column_defs = storage.schema().to_column_definitions();
+
+        // Determine which columns to scan
+        std::vector<table::storage_index_t> column_indices;
         std::pmr::vector<types::complex_logical_type> types(context_->resource());
-        types.reserve(column_defs.size());
-        for (const auto& col_def : column_defs) {
-            types.push_back(col_def.type());
+
+        if (projection_columns_.empty()) {
+            // No projection - scan all columns
+            column_indices.reserve(column_defs.size());
+            types.reserve(column_defs.size());
+            for (size_t i = 0; i < column_defs.size(); ++i) {
+                column_indices.emplace_back(i);
+                types.push_back(column_defs[i].type());
+            }
+        } else {
+            // Projection specified - scan only requested columns
+            column_indices.reserve(projection_columns_.size());
+            types.reserve(projection_columns_.size());
+            for (const auto& col_name : projection_columns_) {
+                // Find column index by name
+                for (size_t i = 0; i < column_defs.size(); ++i) {
+                    if (column_defs[i].type().alias() == col_name) {
+                        column_indices.emplace_back(i);
+                        types.push_back(column_defs[i].type());
+                        break;
+                    }
+                }
+            }
+            std::cout << "[DEBUG full_scan] projection: requested " << projection_columns_.size()
+                      << " columns, found " << column_indices.size() << std::endl;
         }
 
         auto t_types = std::chrono::high_resolution_clock::now();
@@ -99,13 +128,6 @@ namespace components::document_table::operators {
         // Early return if collection is empty (no documents inserted yet)
         if (storage.size() == 0) {
             return;
-        }
-
-        // Prepare column indices - scan all columns
-        std::vector<table::storage_index_t> column_indices;
-        column_indices.reserve(storage.table()->column_count());
-        for (size_t i = 0; i < storage.table()->column_count(); ++i) {
-            column_indices.emplace_back(i);
         }
 
         // Transform expression to table filter

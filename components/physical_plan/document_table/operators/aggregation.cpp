@@ -17,6 +17,11 @@ namespace components::document_table::operators {
 
     void aggregation::set_sort(operator_ptr&& sort) { sort_ = std::move(sort); }
 
+    void aggregation::set_projection(std::vector<std::string> columns) {
+        projection_columns_ = std::move(columns);
+        std::cout << "[DEBUG] aggregation::set_projection - " << projection_columns_.size() << " columns" << std::endl;
+    }
+
     void aggregation::on_execute_impl(pipeline::context_t*) {
         std::cout << "[DEBUG] aggregation::on_execute_impl" << std::endl;
         // Берём output от последнего оператора в цепочке
@@ -29,7 +34,8 @@ namespace components::document_table::operators {
 
         // DEBUG: проверим что происходит
         std::cout << "[DEBUG] aggregation::on_prepare_impl - left_=" << (left_ ? "YES" : "NO")
-                  << ", match_=" << (match_ ? "YES" : "NO") << std::endl;
+                  << ", match_=" << (match_ ? "YES" : "NO")
+                  << ", projection_columns_=" << projection_columns_.size() << std::endl;
 
         if (left_) {
             // Если есть левый ребёнок (например, INSERT или другой оператор)
@@ -44,8 +50,12 @@ namespace components::document_table::operators {
                 executor = std::move(match_);
             } else {
                 // Создаём full_scan для document_table (аналог transfer_scan)
-                executor = static_cast<operator_ptr>(boost::intrusive_ptr(
-                    new full_scan(context_, nullptr, logical_plan::limit_t::unlimit())));
+                auto scan = new full_scan(context_, nullptr, logical_plan::limit_t::unlimit());
+                // Apply projection if set
+                if (!projection_columns_.empty()) {
+                    scan->set_projection(projection_columns_);
+                }
+                executor = static_cast<operator_ptr>(boost::intrusive_ptr(scan));
             }
         }
 
