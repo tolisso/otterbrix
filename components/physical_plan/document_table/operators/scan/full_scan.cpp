@@ -82,28 +82,35 @@ namespace components::document_table::operators {
         // Get column definitions from schema
         auto column_defs = storage.schema().to_column_definitions();
 
-        // Determine which columns to scan
+        // Build full types for filter (filter needs original column indices)
+        std::pmr::vector<types::complex_logical_type> all_types(context_->resource());
+        all_types.reserve(column_defs.size());
+        for (const auto& col_def : column_defs) {
+            all_types.push_back(col_def.type());
+        }
+
+        // Determine which columns to scan (for output)
         std::vector<table::storage_index_t> column_indices;
-        std::pmr::vector<types::complex_logical_type> types(context_->resource());
+        std::pmr::vector<types::complex_logical_type> output_types(context_->resource());
 
         if (projection_columns_.empty()) {
             // No projection - scan all columns
             column_indices.reserve(column_defs.size());
-            types.reserve(column_defs.size());
+            output_types.reserve(column_defs.size());
             for (size_t i = 0; i < column_defs.size(); ++i) {
                 column_indices.emplace_back(i);
-                types.push_back(column_defs[i].type());
+                output_types.push_back(column_defs[i].type());
             }
         } else {
             // Projection specified - scan only requested columns
             column_indices.reserve(projection_columns_.size());
-            types.reserve(projection_columns_.size());
+            output_types.reserve(projection_columns_.size());
             for (const auto& col_name : projection_columns_) {
                 // Find column index by name
                 for (size_t i = 0; i < column_defs.size(); ++i) {
                     if (column_defs[i].type().alias() == col_name) {
                         column_indices.emplace_back(i);
-                        types.push_back(column_defs[i].type());
+                        output_types.push_back(column_defs[i].type());
                         break;
                     }
                 }
@@ -114,8 +121,8 @@ namespace components::document_table::operators {
 
         auto t_types = std::chrono::high_resolution_clock::now();
 
-        // Create output chunk (must be created even if limit=0 or empty collection)
-        output_ = base::operators::make_operator_data(context_->resource(), types);
+        // Create output chunk with projected types
+        output_ = base::operators::make_operator_data(context_->resource(), output_types);
 
         auto t_output = std::chrono::high_resolution_clock::now();
 
@@ -130,10 +137,10 @@ namespace components::document_table::operators {
             return;
         }
 
-        // Transform expression to table filter
+        // Transform expression to table filter using FULL types (for correct column indices)
         auto filter = transform_predicate(
             expression_,
-            types,
+            all_types,
             pipeline_context ? &pipeline_context->parameters : nullptr
         );
 
@@ -158,7 +165,7 @@ namespace components::document_table::operators {
 
         auto t_end = std::chrono::high_resolution_clock::now();
 
-        std::cout << "[TIMING full_scan] columns=" << types.size()
+        std::cout << "[TIMING full_scan] columns=" << output_types.size()
                   << ", rows=" << output_->data_chunk().size()
                   << " | types: " << std::chrono::duration_cast<std::chrono::milliseconds>(t_types - t_start).count() << "ms"
                   << ", output_alloc: " << std::chrono::duration_cast<std::chrono::milliseconds>(t_output - t_types).count() << "ms"

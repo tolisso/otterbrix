@@ -4,6 +4,8 @@
 #include <components/logical_plan/node_limit.hpp>
 #include <components/physical_plan/base/operators/operator.hpp>
 #include <services/memory_storage/context_storage.hpp>
+#include <vector>
+#include <string>
 
 namespace services::document_table::planner::impl {
 
@@ -11,5 +13,12 @@ namespace services::document_table::planner::impl {
     create_plan_match(const context_storage_t& context,
                       const components::logical_plan::node_ptr& node,
                       components::logical_plan::limit_t limit);
+
+    // Overload with projection support
+    components::base::operators::operator_ptr
+    create_plan_match(const context_storage_t& context,
+                      const components::logical_plan::node_ptr& node,
+                      components::logical_plan::limit_t limit,
+                      const std::vector<std::string>& projection);
 
 } // namespace services::document_table::planner::impl
