@@ -4,6 +4,8 @@
 
 #include <components/physical_plan/base/operators/operator_empty.hpp>
 #include <services/collection/collection.hpp>
+#include <chrono>
+#include <iostream>
 
 namespace components::table::operators {
 
@@ -33,18 +35,43 @@ namespace components::table::operators {
 
     void operator_group_t::on_execute_impl(pipeline::context_t* pipeline_context) {
         if (left_ && left_->output()) {
+            auto t0 = std::chrono::high_resolution_clock::now();
+
             create_list_rows();
+
+            auto t1 = std::chrono::high_resolution_clock::now();
+
             calc_aggregate_values(pipeline_context);
+
+            auto t2 = std::chrono::high_resolution_clock::now();
+
             output_ = base::operators::make_operator_data(
                 left_->output()->resource(),
                 impl::transpose(left_->output()->resource(), transposed_output_, result_types_));
+
+            auto t3 = std::chrono::high_resolution_clock::now();
+
+            std::cout << "[TIMING operator_group] create_list_rows: "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "ms, "
+                      << "calc_aggregate: "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() << "ms, "
+                      << "transpose: "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count() << "ms, "
+                      << "total: "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t0).count() << "ms"
+                      << std::endl;
         }
     }
 
     void operator_group_t::create_list_rows() {
         auto& chunk = left_->output()->data_chunk();
 
+        auto t0 = std::chrono::high_resolution_clock::now();
+
         auto matrix = impl::transpose(left_->output()->resource(), chunk);
+
+        auto t1 = std::chrono::high_resolution_clock::now();
+
         if (!matrix.empty()) {
             for (const auto& key : keys_) {
                 auto value = key.getter->value(matrix.front());
@@ -53,6 +80,10 @@ namespace components::table::operators {
                 }
             }
         }
+
+        auto t2 = std::chrono::high_resolution_clock::now();
+
+        size_t total_comparisons = 0;
 
         for (const auto& row : matrix) {
             std::pmr::vector<types::logical_value_t> new_row(row.get_allocator().resource());
@@ -71,6 +102,7 @@ namespace components::table::operators {
             if (is_valid) {
                 bool is_new = true;
                 for (size_t i = 0; i < transposed_output_.size(); i++) {
+                    total_comparisons++;
                     if (new_row == transposed_output_[i]) {
                         inputs_.at(i).emplace_back(std::move(row));
                         is_new = false;
@@ -85,6 +117,16 @@ namespace components::table::operators {
                 }
             }
         }
+
+        auto t3 = std::chrono::high_resolution_clock::now();
+
+        std::cout << "[TIMING create_list_rows] chunk: " << chunk.size() << " rows x " << chunk.column_count() << " cols"
+                  << " | transpose: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "ms"
+                  << ", types: " << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() << "ms"
+                  << ", grouping: " << std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count() << "ms"
+                  << ", comparisons: " << total_comparisons
+                  << ", groups: " << transposed_output_.size()
+                  << std::endl;
     }
 
     void operator_group_t::calc_aggregate_values(pipeline::context_t* pipeline_context) {

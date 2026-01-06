@@ -77,11 +77,22 @@ std::unique_ptr<test_spaces> setup_document_table(const std::string& tmp_dir,
         "CREATE TABLE bluesky_bench.bluesky() WITH (storage='document_table');");
     REQUIRE(cur->is_success());
 
-    // Insert data
+    // Insert data with explicit _id generation
     auto session = otterbrix::session_id_t();
     std::pmr::vector<components::document::document_ptr> docs(dispatcher->resource());
+    size_t doc_idx = 0;
     for (const auto& line : json_lines) {
-        docs.push_back(components::document::document_t::document_from_json(line, dispatcher->resource()));
+        auto doc = components::document::document_t::document_from_json(line, dispatcher->resource());
+
+        // Add unique _id if missing
+        if (!doc->is_exists("/_id")) {
+            std::ostringstream id_stream;
+            id_stream << std::setfill('0') << std::setw(24) << doc_idx;
+            doc->set("/_id", id_stream.str());
+        }
+
+        docs.push_back(doc);
+        doc_idx++;
     }
     dispatcher->insert_many(session, database_name, collection_name, docs);
 
@@ -370,7 +381,7 @@ TEST_CASE("JSONBench 0: INSERT Performance", "[jsonbench][insert]") {
 TEST_CASE("JSONBench Q1: Top event types", "[jsonbench][q1]") {
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
-    
+
     print_header("JSONBench Q1: Top event types (GROUP BY)", "", json_lines.size());
 
     QueryPair queries(

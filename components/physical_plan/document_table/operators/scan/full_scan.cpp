@@ -3,6 +3,8 @@
 #include <components/physical_plan/table/operators/transformation.hpp>
 #include <components/table/column_state.hpp>
 #include <services/collection/collection.hpp>
+#include <chrono>
+#include <iostream>
 
 namespace components::document_table::operators {
 
@@ -68,9 +70,7 @@ namespace components::document_table::operators {
         , limit_(limit) {}
 
     void full_scan::on_execute_impl(pipeline::context_t* pipeline_context) {
-        // Skip logging for now - test contexts don't have valid loggers
-        // TODO: Add proper logging when context has valid logger
-        // trace(context_->log(), "document_table::full_scan");
+        auto t_start = std::chrono::high_resolution_clock::now();
 
         // Get storage and schema
         auto& storage = context_->document_table_storage().storage();
@@ -83,8 +83,12 @@ namespace components::document_table::operators {
             types.push_back(col_def.type());
         }
 
+        auto t_types = std::chrono::high_resolution_clock::now();
+
         // Create output chunk (must be created even if limit=0 or empty collection)
         output_ = base::operators::make_operator_data(context_->resource(), types);
+
+        auto t_output = std::chrono::high_resolution_clock::now();
 
         // Early return if limit is 0
         int count = 0;
@@ -111,10 +115,17 @@ namespace components::document_table::operators {
             pipeline_context ? &pipeline_context->parameters : nullptr
         );
 
+        auto t_filter = std::chrono::high_resolution_clock::now();
+
         // Initialize and execute scan
         table::table_scan_state state(context_->resource());
         storage.initialize_scan(state, column_indices, filter.get());
+
+        auto t_init = std::chrono::high_resolution_clock::now();
+
         storage.scan(output_->data_chunk(), state);
+
+        auto t_scan = std::chrono::high_resolution_clock::now();
 
         // Apply limit
         if (limit_.limit() >= 0) {
@@ -122,6 +133,18 @@ namespace components::document_table::operators {
                 std::min<size_t>(output_->data_chunk().size(), static_cast<size_t>(limit_.limit()))
             );
         }
+
+        auto t_end = std::chrono::high_resolution_clock::now();
+
+        std::cout << "[TIMING full_scan] columns=" << types.size()
+                  << ", rows=" << output_->data_chunk().size()
+                  << " | types: " << std::chrono::duration_cast<std::chrono::milliseconds>(t_types - t_start).count() << "ms"
+                  << ", output_alloc: " << std::chrono::duration_cast<std::chrono::milliseconds>(t_output - t_types).count() << "ms"
+                  << ", filter: " << std::chrono::duration_cast<std::chrono::milliseconds>(t_filter - t_output).count() << "ms"
+                  << ", init: " << std::chrono::duration_cast<std::chrono::milliseconds>(t_init - t_filter).count() << "ms"
+                  << ", scan: " << std::chrono::duration_cast<std::chrono::milliseconds>(t_scan - t_init).count() << "ms"
+                  << ", total: " << std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count() << "ms"
+                  << std::endl;
     }
 
 } // namespace components::document_table::operators
