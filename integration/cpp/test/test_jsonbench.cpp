@@ -3,9 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include <chrono>
-#include <set>
 #include <iomanip>
-#include <algorithm>
 
 static const database_name_t database_name = "bluesky_bench";
 static const collection_name_t collection_name = "bluesky";
@@ -13,7 +11,10 @@ static const collection_name_t collection_name = "bluesky";
 using components::cursor::cursor_t_ptr;
 namespace types = components::types;
 
-// Helper to read NDJSON file
+namespace {
+
+std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_10000.json";
+
 std::vector<std::string> read_ndjson_file(const std::string& filepath) {
     std::vector<std::string> lines;
     std::ifstream file(filepath);
@@ -21,352 +22,254 @@ std::vector<std::string> read_ndjson_file(const std::string& filepath) {
         std::cerr << "Failed to open file: " << filepath << std::endl;
         return lines;
     }
-    
+
     std::string line;
     while (std::getline(file, line)) {
         if (!line.empty()) {
             lines.push_back(line);
         }
     }
-    
-    std::cout << "Read " << lines.size() << " lines from " << filepath << std::endl;
+
     return lines;
 }
 
-TEST_CASE("JSONBench - Compare document_table vs document results") {
-    // Read test data
-    std::string data_path = "test_sample_1000.json";
+struct BenchmarkResult {
+    long long time_ms;
+    size_t count;
+    std::string storage_type;
+};
+
+struct QueryPair {
+    std::string document_table_query;
+    std::string document_query;
+
+    QueryPair(const std::string& dt_query, const std::string& doc_query)
+        : document_table_query(dt_query), document_query(doc_query) {}
+
+    explicit QueryPair(const std::string& query)
+        : document_table_query(query), document_query(query) {}
+};
+
+std::unique_ptr<test_spaces> setup_storage(const std::string& tmp_dir,
+                                            const std::vector<std::string>& json_lines,
+                                            const std::string& storage_type) {
+    auto config = test_create_config(tmp_dir);
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    auto space = std::make_unique<test_spaces>(config);
+    auto* dispatcher = space->dispatcher();
+
+    dispatcher->create_database(otterbrix::session_id_t(), database_name);
+
+    std::string create_sql = "CREATE TABLE bluesky_bench.bluesky() WITH (storage='" + storage_type + "');";
+    auto cur = dispatcher->execute_sql(otterbrix::session_id_t(), create_sql);
+    REQUIRE(cur->is_success());
+
+    auto session = otterbrix::session_id_t();
+    std::pmr::vector<components::document::document_ptr> docs(dispatcher->resource());
+    size_t doc_idx = 0;
+    for (const auto& line : json_lines) {
+        auto doc = components::document::document_t::document_from_json(line, dispatcher->resource());
+
+        if (!doc->is_exists("/_id")) {
+            std::ostringstream id_stream;
+            id_stream << std::setfill('0') << std::setw(24) << doc_idx;
+            doc->set("/_id", id_stream.str());
+        }
+
+        docs.push_back(doc);
+        doc_idx++;
+    }
+    dispatcher->insert_many(session, database_name, collection_name, docs);
+
+    return space;
+}
+
+BenchmarkResult run_query(const std::unique_ptr<test_spaces>& space,
+                          const std::string& query,
+                          const std::string& storage_type) {
+    auto* dispatcher = space->dispatcher();
+    auto session = otterbrix::session_id_t();
+
+    auto start = std::chrono::high_resolution_clock::now();
+    auto cur = dispatcher->execute_sql(session, query);
+    auto end = std::chrono::high_resolution_clock::now();
+
+    REQUIRE(cur->is_success());
+
+    return BenchmarkResult{
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count(),
+        cur->size(),
+        storage_type
+    };
+}
+
+void print_header(const std::string& title, size_t record_count) {
+    std::cout << "\n======================================================" << std::endl;
+    std::cout << title << " (" << record_count << " records)" << std::endl;
+    std::cout << "======================================================\n" << std::endl;
+}
+
+void print_comparison(const std::string& test_name,
+                     const BenchmarkResult& dt_result,
+                     const BenchmarkResult& doc_result,
+                     const std::string& unit = "records") {
+    std::cout << "\n--- " << test_name << " ---" << std::endl;
+    std::cout << "document_table: " << dt_result.time_ms << " ms (" << dt_result.count << " " << unit << ")" << std::endl;
+    std::cout << "document:       " << doc_result.time_ms << " ms (" << doc_result.count << " " << unit << ")" << std::endl;
+
+    if (doc_result.time_ms > 0 && dt_result.time_ms > 0) {
+        if (doc_result.time_ms < dt_result.time_ms) {
+            double speedup = (double)dt_result.time_ms / doc_result.time_ms;
+            std::cout << "Winner: document (B-tree) - " << std::fixed << std::setprecision(1) << speedup << "x faster" << std::endl;
+        } else {
+            double speedup = (double)doc_result.time_ms / dt_result.time_ms;
+            std::cout << "Winner: document_table - " << std::fixed << std::setprecision(1) << speedup << "x faster" << std::endl;
+        }
+    }
+}
+
+} // anonymous namespace
+
+TEST_CASE("JSONBench Q1: Top event types", "[jsonbench][q1]") {
     auto json_lines = read_ndjson_file(data_path);
     REQUIRE(!json_lines.empty());
-    
-    std::cout << "\n========================================" << std::endl;
-    std::cout << "Testing with " << json_lines.size() << " records" << std::endl;
-    std::cout << "========================================\n" << std::endl;
 
-    // Test document_table
-    std::vector<std::string> doc_table_jsons;
-    size_t doc_table_count = 0;
-    {
-        std::cout << "\n[1/2] Testing document_table storage..." << std::endl;
-        auto config = test_create_config("/tmp/test_jsonbench_dt");
-        test_clear_directory(config);
-        config.disk.on = false;
-        config.wal.on = false;
-        test_spaces space(config);
-        auto* dispatcher = space.dispatcher();
+    print_header("JSONBench Q1: Top event types (GROUP BY)", json_lines.size());
 
-        {
-            auto session = otterbrix::session_id_t();
-            dispatcher->create_database(session, database_name);
-        }
-        {
-            auto session = otterbrix::session_id_t();
-            auto cur = dispatcher->execute_sql(
-                session,
-                "CREATE TABLE bluesky_bench.bluesky() WITH (storage='document_table');");
-            REQUIRE(cur->is_success());
-            std::cout << "✓ Table created" << std::endl;
-        }
-        
-        // Insert data in batches (document_table has capacity limit of 1024 per batch)
-        {
-            auto session = otterbrix::session_id_t();
-            constexpr size_t batch_size = 1000;
-            size_t total_inserted = 0;
-            
-            auto start = std::chrono::high_resolution_clock::now();
-            
-            for (size_t batch_start = 0; batch_start < json_lines.size(); batch_start += batch_size) {
-                size_t batch_end = std::min(batch_start + batch_size, json_lines.size());
-                std::pmr::vector<components::document::document_ptr> batch_documents(dispatcher->resource());
-                
-                for (size_t i = batch_start; i < batch_end; ++i) {
-                    try {
-                        auto doc = components::document::document_t::document_from_json(
-                            json_lines[i], 
-                            dispatcher->resource()
-                        );
-                        batch_documents.push_back(doc);
-                    } catch (const std::exception& e) {
-                        std::cout << "✗ Failed to parse record " << i << ": " << e.what() << std::endl;
-                        REQUIRE(false);
-                    }
-                }
-                
-                dispatcher->insert_many(session, database_name, collection_name, batch_documents);
-                total_inserted += batch_documents.size();
-                
-                if ((batch_start / batch_size + 1) % 5 == 0 || batch_end == json_lines.size()) {
-                    std::cout << "  Inserted " << total_inserted << " / " << json_lines.size() << " records..." << std::endl;
-                }
-            }
-            
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            
-            std::cout << "✓ Inserted " << total_inserted << " records in " 
-                      << duration.count() << "ms (" 
-                      << (total_inserted * 1000.0 / duration.count()) << " rec/s)" << std::endl;
-        }
-        
-        // Query all records
-        {
-            auto session = otterbrix::session_id_t();
-            auto start = std::chrono::high_resolution_clock::now();
-            auto cur = dispatcher->execute_sql(
-                session,
-                "SELECT * FROM bluesky_bench.bluesky;");
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            
-            REQUIRE(cur->is_success());
-            doc_table_count = cur->size();
-            
-            std::cout << "✓ SELECT * returned " << cur->size() 
-                      << " records in " << duration.count() << "ms" << std::endl;
-        }
-        
-        // Query specific fields to extract comparable data
-        {
-            auto session = otterbrix::session_id_t();
-            auto cur = dispatcher->execute_sql(
-                session,
-                "SELECT did, kind FROM bluesky_bench.bluesky;");
-            
-            REQUIRE(cur->is_success());
-            
-            if (cur->uses_table_data()) {
-                // document_table returns data_chunk
-                auto& chunk = cur->chunk_data();
-                std::cout << "  Extracted data_chunk: " << chunk.size() << " rows, " 
-                          << chunk.column_count() << " columns" << std::endl;
-                
-                // Extract values from columns (col 0=did, col 1=kind)
-                for (size_t i = 0; i < chunk.size(); ++i) {
-                    try {
-                        auto did_val = chunk.value(0, i);
-                        if (!did_val.is_null() && did_val.type().type() == types::logical_type::STRING_LITERAL) {
-                            std::string did = std::string(did_val.value<std::string_view>());
-                            doc_table_jsons.push_back(did);
-                        }
-                    } catch (const std::exception& e) {
-                        std::cout << "  Warning: failed to extract value from row " << i << ": " << e.what() << std::endl;
-                    }
-                }
-                std::cout << "  Extracted " << doc_table_jsons.size() << " DIDs from data_chunk" << std::endl;
-            }
-        }
-        
-        // Query with filter
-        {
-            auto session = otterbrix::session_id_t();
-            auto cur = dispatcher->execute_sql(
-                session,
-                "SELECT * FROM bluesky_bench.bluesky WHERE kind = 'commit' LIMIT 10;");
-            REQUIRE(cur->is_success());
-            std::cout << "✓ SELECT with WHERE returned " << cur->size() << " records" << std::endl;
-        }
-    }
+    QueryPair queries(
+        "SELECT commit_dot_collection AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;",
+        "SELECT \"/commit/collection\" AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;"
+    );
 
-    // Test document (B-tree)
-    std::vector<std::string> document_jsons;
-    size_t document_count = 0;
-    {
-        std::cout << "\n[2/2] Testing document (B-tree) storage..." << std::endl;
-        auto config = test_create_config("/tmp/test_jsonbench_doc");
-        test_clear_directory(config);
-        config.disk.on = false;
-        config.wal.on = false;
-        test_spaces space(config);
-        auto* dispatcher = space.dispatcher();
+    std::cout << "[1/2] Testing document_table..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q1_dt", json_lines, "document_table");
+    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
+    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
 
-        {
-            auto session = otterbrix::session_id_t();
-            dispatcher->create_database(session, database_name);
-        }
-        {
-            auto session = otterbrix::session_id_t();
-            auto cur = dispatcher->execute_sql(
-                session,
-                "CREATE TABLE bluesky_bench.bluesky() WITH (storage='documents');");
-            REQUIRE(cur->is_success());
-            std::cout << "✓ Table created" << std::endl;
-        }
-        
-        // Insert data in batches
-        {
-            auto session = otterbrix::session_id_t();
-            constexpr size_t batch_size = 1000;
-            size_t total_inserted = 0;
-            std::set<std::string> inserted_ids;
-            
-            auto start = std::chrono::high_resolution_clock::now();
-            
-            for (size_t batch_start = 0; batch_start < json_lines.size(); batch_start += batch_size) {
-                size_t batch_end = std::min(batch_start + batch_size, json_lines.size());
-                std::pmr::vector<components::document::document_ptr> batch_documents(dispatcher->resource());
-                
-                for (size_t i = batch_start; i < batch_end; ++i) {
-                    try {
-                        auto doc = components::document::document_t::document_from_json(
-                            json_lines[i], 
-                            dispatcher->resource()
-                        );
-                        
-                        // Add unique _id if missing (required for B-tree documents storage)
-                        if (!doc->is_exists("/_id")) {
-                            std::ostringstream id_stream;
-                            id_stream << std::setfill('0') << std::setw(24) << i;
-                            doc->set("/_id", id_stream.str());
-                            if (i < 3) {
-                                std::cout << "  Document " << i << " generated _id: " << id_stream.str() << std::endl;
-                            }
-                        }
-                        
-                        if (doc->is_exists("/_id")) {
-                            std::string doc_id(doc->get_string("/_id"));
-                            inserted_ids.insert(doc_id);
-                        }
-                        
-                        batch_documents.push_back(doc);
-                    } catch (const std::exception& e) {
-                        std::cout << "✗ Failed to parse record " << i << ": " << e.what() << std::endl;
-                        REQUIRE(false);
-                    }
-                }
-                
-                dispatcher->insert_many(session, database_name, collection_name, batch_documents);
-                total_inserted += batch_documents.size();
-                
-                if ((batch_start / batch_size + 1) % 5 == 0 || batch_end == json_lines.size()) {
-                    std::cout << "  Inserted " << total_inserted << " / " << json_lines.size() << " records..." << std::endl;
-                }
-            }
-            
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            
-            std::cout << "  Unique _id values: " << inserted_ids.size() << std::endl;
-            std::cout << "✓ Inserted " << total_inserted << " records in " 
-                      << duration.count() << "ms (" 
-                      << (total_inserted * 1000.0 / duration.count()) << " rec/s)" << std::endl;
-        }
-        
-        // Query all records
-        {
-            auto session = otterbrix::session_id_t();
-            auto start = std::chrono::high_resolution_clock::now();
-            auto cur = dispatcher->execute_sql(
-                session,
-                "SELECT * FROM bluesky_bench.bluesky;");
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            
-            REQUIRE(cur->is_success());
-            document_count = cur->size();
-            
-            std::cout << "✓ SELECT * returned " << cur->size() 
-                      << " records in " << duration.count() << "ms" << std::endl;
-        }
-        
-        // Query specific fields to extract comparable data  
-        {
-            auto session = otterbrix::session_id_t();
-            auto cur = dispatcher->execute_sql(
-                session,
-                "SELECT did, kind FROM bluesky_bench.bluesky;");
-            
-            REQUIRE(cur->is_success());
-            
-            if (!cur->uses_table_data()) {
-                // documents returns document list
-                auto& docs = cur->document_data();
-                std::cout << "  Extracted documents: " << docs.size() << std::endl;
-                
-                // Extract DIDs
-                for (size_t i = 0; i < docs.size(); ++i) {
-                    if (docs[i] && docs[i]->is_exists("/did")) {
-                        std::string did = std::string(docs[i]->get_string("/did"));
-                        document_jsons.push_back(did);
-                    }
-                }
-                std::cout << "  Extracted " << document_jsons.size() << " DIDs from documents" << std::endl;
-            }
-        }
-        
-        // Query with filter
-        {
-            auto session = otterbrix::session_id_t();
-            auto cur = dispatcher->execute_sql(
-                session,
-                "SELECT * FROM bluesky_bench.bluesky WHERE kind = 'commit' LIMIT 10;");
-            REQUIRE(cur->is_success());
-            std::cout << "✓ SELECT with WHERE returned " << cur->size() << " records" << std::endl;
-        }
-    }
-    
-    // Compare results
-    {
-        std::cout << "\n========================================" << std::endl;
-        std::cout << "COMPARISON RESULTS" << std::endl;
-        std::cout << "========================================" << std::endl;
-        
-        std::cout << "document_table returned: " << doc_table_count << " records" << std::endl;
-        std::cout << "document returned:       " << document_count << " records" << std::endl;
-        
-        REQUIRE(doc_table_count == document_count);
-        std::cout << "✓ Both storages returned same number of records" << std::endl;
-        
-        // Compare extracted DIDs
-        if (!doc_table_jsons.empty() && !document_jsons.empty()) {
-            std::cout << "\n✓ DID Extraction:" << std::endl;
-            std::cout << "  document_table extracted: " << doc_table_jsons.size() << " DIDs" << std::endl;
-            std::cout << "  documents extracted:      " << document_jsons.size() << " DIDs" << std::endl;
-            
-            // Sort both lists for comparison
-            std::sort(doc_table_jsons.begin(), doc_table_jsons.end());
-            std::sort(document_jsons.begin(), document_jsons.end());
-            
-            // Compare
-            bool same = (doc_table_jsons.size() == document_jsons.size());
-            if (same) {
-                for (size_t i = 0; i < doc_table_jsons.size(); ++i) {
-                    if (doc_table_jsons[i] != document_jsons[i]) {
-                        same = false;
-                        std::cout << "\n  ✗ Mismatch at index " << i << ":" << std::endl;
-                        std::cout << "    document_table: " << doc_table_jsons[i] << std::endl;
-                        std::cout << "    documents:      " << document_jsons[i] << std::endl;
-                        break;
-                    }
-                }
-            }
-            
-            if (same) {
-                std::cout << "  ✅ All DIDs match between storages!" << std::endl;
-                
-                // Show samples
-                std::cout << "\n  Sample DIDs (first 3):" << std::endl;
-                for (size_t i = 0; i < std::min(size_t(3), doc_table_jsons.size()); ++i) {
-                    std::cout << "    " << (i+1) << ". " << doc_table_jsons[i] << std::endl;
-                }
-                
-                REQUIRE(doc_table_jsons == document_jsons);
-            } else {
-                std::cout << "  ✗ DIDs do NOT match!" << std::endl;
-                REQUIRE(false);
-            }
-        } else {
-            std::cout << "\n⚠️  Could not extract DIDs for comparison" << std::endl;
-        }
-        
-        std::cout << "\n========================================" << std::endl;
-        std::cout << "SUMMARY" << std::endl;
-        std::cout << "========================================" << std::endl;
-        std::cout << "✅ Both storages successfully store and retrieve all " << json_lines.size() << " records" << std::endl;
-        std::cout << "✅ documents (B-tree): Fast insert (" << (json_lines.size() * 1000.0 / 4) << " rec/s)" << std::endl;
-        std::cout << "✅ document_table: Good for analytical queries (columnar format)" << std::endl;
-        std::cout << "\n📝 Note: Full JSON comparison requires data_chunk → document conversion" << std::endl;
-        std::cout << "   for document_table storage (future enhancement)" << std::endl;
-        std::cout << "========================================\n" << std::endl;
-    }
+    std::cout << "[2/2] Testing document..." << std::endl;
+    auto doc_space = setup_storage("/tmp/bench_q1_doc", json_lines, "documents");
+    auto doc_result = run_query(doc_space, queries.document_query, "document");
+    std::cout << "  document: " << doc_result.time_ms << "ms (" << doc_result.count << " groups)" << std::endl;
+
+    print_comparison("QUERY 1", dt_result, doc_result, "groups");
+}
+
+TEST_CASE("JSONBench Q2: Event types with unique users", "[jsonbench][q2]") {
+    auto json_lines = read_ndjson_file(data_path);
+    REQUIRE(!json_lines.empty());
+
+    print_header("JSONBench Q2: Event types + unique users (COUNT DISTINCT)", json_lines.size());
+
+    QueryPair queries(
+        "SELECT commit_dot_collection AS event, COUNT(*) AS count, COUNT(DISTINCT did) AS users "
+        "FROM bluesky_bench.bluesky WHERE kind = 'commit' AND commit_dot_operation = 'create' "
+        "GROUP BY event ORDER BY count DESC;",
+        "SELECT \"/commit/collection\" AS event, COUNT(*) AS count, COUNT(DISTINCT did) AS users "
+        "FROM bluesky_bench.bluesky WHERE kind = 'commit' AND \"/commit/operation\" = 'create' "
+        "GROUP BY event ORDER BY count DESC;"
+    );
+
+    std::cout << "[1/2] Testing document_table..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q2_dt", json_lines, "document_table");
+    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
+    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
+
+    std::cout << "[2/2] Testing document..." << std::endl;
+    auto doc_space = setup_storage("/tmp/bench_q2_doc", json_lines, "documents");
+    auto doc_result = run_query(doc_space, queries.document_query, "document");
+    std::cout << "  document: " << doc_result.time_ms << "ms (" << doc_result.count << " groups)" << std::endl;
+
+    print_comparison("QUERY 2", dt_result, doc_result, "groups");
+}
+
+TEST_CASE("JSONBench Q3: Event counts with filters", "[jsonbench][q3]") {
+    auto json_lines = read_ndjson_file(data_path);
+    REQUIRE(!json_lines.empty());
+
+    print_header("JSONBench Q3: Event counts (GROUP BY with filters)", json_lines.size());
+
+    QueryPair queries(
+        "SELECT commit_dot_collection AS event, COUNT(*) AS count "
+        "FROM bluesky_bench.bluesky "
+        "WHERE kind = 'commit' AND commit_dot_operation = 'create' "
+        "GROUP BY event ORDER BY count DESC;",
+        "SELECT \"/commit/collection\" AS event, COUNT(*) AS count "
+        "FROM bluesky_bench.bluesky "
+        "WHERE kind = 'commit' AND \"/commit/operation\" = 'create' "
+        "GROUP BY event ORDER BY count DESC;"
+    );
+
+    std::cout << "[1/2] Testing document_table..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q3_dt", json_lines, "document_table");
+    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
+    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
+
+    std::cout << "[2/2] Testing document..." << std::endl;
+    auto doc_space = setup_storage("/tmp/bench_q3_doc", json_lines, "documents");
+    auto doc_result = run_query(doc_space, queries.document_query, "document");
+    std::cout << "  document: " << doc_result.time_ms << "ms (" << doc_result.count << " groups)" << std::endl;
+
+    print_comparison("QUERY 3", dt_result, doc_result, "groups");
+}
+
+TEST_CASE("JSONBench Q4: First 3 users to post", "[jsonbench][q4]") {
+    auto json_lines = read_ndjson_file(data_path);
+    REQUIRE(!json_lines.empty());
+
+    print_header("JSONBench Q4: First 3 users to post (MIN + GROUP BY)", json_lines.size());
+
+    QueryPair queries(
+        "SELECT did AS user_id, MIN(time_us) AS first_post_time "
+        "FROM bluesky_bench.bluesky "
+        "WHERE kind = 'commit' AND commit_dot_operation = 'create' AND commit_dot_collection = 'app.bsky.feed.post' "
+        "GROUP BY user_id ORDER BY first_post_time ASC LIMIT 3;",
+        "SELECT did AS user_id, MIN(time_us) AS first_post_time "
+        "FROM bluesky_bench.bluesky "
+        "WHERE kind = 'commit' AND \"/commit/operation\" = 'create' AND \"/commit/collection\" = 'app.bsky.feed.post' "
+        "GROUP BY user_id ORDER BY first_post_time ASC LIMIT 3;"
+    );
+
+    std::cout << "[1/2] Testing document_table..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q4_dt", json_lines, "document_table");
+    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
+    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " users)" << std::endl;
+
+    std::cout << "[2/2] Testing document..." << std::endl;
+    auto doc_space = setup_storage("/tmp/bench_q4_doc", json_lines, "documents");
+    auto doc_result = run_query(doc_space, queries.document_query, "document");
+    std::cout << "  document: " << doc_result.time_ms << "ms (" << doc_result.count << " users)" << std::endl;
+
+    print_comparison("QUERY 4", dt_result, doc_result, "users");
+}
+
+TEST_CASE("JSONBench Q5: Top 3 users by activity span", "[jsonbench][q5]") {
+    auto json_lines = read_ndjson_file(data_path);
+    REQUIRE(!json_lines.empty());
+
+    print_header("JSONBench Q5: Top 3 users by activity span (MAX-MIN)", json_lines.size());
+
+    QueryPair queries(
+        "SELECT did AS user_id, MAX(time_us) AS max_time, MIN(time_us) AS min_time "
+        "FROM bluesky_bench.bluesky "
+        "WHERE kind = 'commit' AND commit_dot_operation = 'create' AND commit_dot_collection = 'app.bsky.feed.post' "
+        "GROUP BY user_id LIMIT 3;",
+        "SELECT did AS user_id, MAX(time_us) AS max_time, MIN(time_us) AS min_time "
+        "FROM bluesky_bench.bluesky "
+        "WHERE kind = 'commit' AND \"/commit/operation\" = 'create' AND \"/commit/collection\" = 'app.bsky.feed.post' "
+        "GROUP BY user_id LIMIT 3;"
+    );
+
+    std::cout << "[1/2] Testing document_table..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q5_dt", json_lines, "document_table");
+    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
+    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " users)" << std::endl;
+
+    std::cout << "[2/2] Testing document..." << std::endl;
+    auto doc_space = setup_storage("/tmp/bench_q5_doc", json_lines, "documents");
+    auto doc_result = run_query(doc_space, queries.document_query, "document");
+    std::cout << "  document: " << doc_result.time_ms << "ms (" << doc_result.count << " users)" << std::endl;
+
+    print_comparison("QUERY 5", dt_result, doc_result, "users");
 }
