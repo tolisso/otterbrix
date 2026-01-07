@@ -872,6 +872,15 @@ namespace services::dispatcher {
                     }
                     break;
                 }
+                // Handle document_table storage with data_chunk
+                if (node_info->uses_data_chunk() && comp_sch.has_value()) {
+                    const auto& chunk_types = node_info->data_chunk().types();
+                    for (const auto& col_type : chunk_types) {
+                        comp_sch.value().get().append(std::pmr::string(col_type.alias(), resource()), col_type);
+                    }
+                    break;
+                }
+                break;
             }
             case node_type::delete_t: {
                 if (catalog_.table_computes(id)) {

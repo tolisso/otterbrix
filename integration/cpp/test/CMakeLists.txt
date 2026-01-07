@@ -15,6 +15,7 @@ set( ${PROJECT_NAME}_SOURCES
         test_connections.cpp
         test_jsonbench.cpp
         test_jsonbench_old.cpp
+        test_document_table_catalog.cpp
 )
 
 add_executable(${PROJECT_NAME} main.cpp ${${PROJECT_NAME}_SOURCES})

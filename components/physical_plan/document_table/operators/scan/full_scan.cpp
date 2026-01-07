@@ -49,8 +49,10 @@ namespace components::document_table::operators {
                 case expressions::compare_type::invalid:
                     throw std::runtime_error("unsupported compare_type in expression to filter conversion");
                 default: {
+                    std::string search_name = expression->primary_key().as_string();
+                    std::string alt_search_name = "/" + search_name;
                     auto it = std::find_if(types.begin(), types.end(), [&](const types::complex_logical_type& type) {
-                        return type.alias() == expression->primary_key().as_string();
+                        return type.alias() == search_name || type.alias() == alt_search_name;
                     });
                     assert(it != types.end());
                     return std::make_unique<table::constant_filter_t>(
@@ -106,17 +108,19 @@ namespace components::document_table::operators {
             column_indices.reserve(projection_columns_.size());
             output_types.reserve(projection_columns_.size());
             for (const auto& col_name : projection_columns_) {
-                // Find column index by name
+                // Find column index by name (handle both "/" prefixed and non-prefixed names)
+                std::string search_name = col_name;
+                std::string alt_search_name = "/" + col_name;
                 for (size_t i = 0; i < column_defs.size(); ++i) {
-                    if (column_defs[i].type().alias() == col_name) {
+                    const auto& col_alias = column_defs[i].type().alias();
+                    if (col_alias == search_name || col_alias == alt_search_name ||
+                        column_defs[i].name() == search_name || column_defs[i].name() == alt_search_name) {
                         column_indices.emplace_back(i);
                         output_types.push_back(column_defs[i].type());
                         break;
                     }
                 }
             }
-            std::cout << "[DEBUG full_scan] projection: requested " << projection_columns_.size()
-                      << " columns, found " << column_indices.size() << std::endl;
         }
 
         auto t_types = std::chrono::high_resolution_clock::now();

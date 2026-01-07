@@ -1,5 +1,6 @@
 #include "executor.hpp"
 
+#include <stdexcept>
 #include <components/index/disk/route.hpp>
 #include <components/physical_plan/collection/operators/operator_delete.hpp>
 #include <components/physical_plan/collection/operators/operator_insert.hpp>
@@ -189,7 +190,13 @@ namespace services::collection::executor {
             return;
         }
         components::pipeline::context_t pipeline_context{session, address(), memory_storage_, parameters};
-        plan->on_execute(&pipeline_context);
+        try {
+            plan->on_execute(&pipeline_context);
+        } catch (const std::exception& e) {
+            execute_sub_plan_finish_(session,
+                                     make_cursor(resource(), error_code_t::other_error, e.what()));
+            return;
+        }
         if (!plan->is_executed()) {
             sessions::make_session(
                 collection->sessions(),
@@ -235,6 +242,7 @@ namespace services::collection::executor {
         components::base::operators::operator_write_data_t::updated_types_map_t updates) {
         if (result->is_error() || !plans_.contains(session)) {
             execute_plan_finish_(session, std::move(result), std::move(updates));
+            return;
         }
         auto& plan = plans_.at(session);
         if (plan.sub_plans.size() == 1) {

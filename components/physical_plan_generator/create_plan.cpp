@@ -1,5 +1,6 @@
 #include "create_plan.hpp"
 
+#include <components/logical_plan/node_data.hpp>
 #include "impl/create_plan_add_index.hpp"
 #include "impl/create_plan_aggregate.hpp"
 #include "impl/create_plan_data.hpp"
@@ -117,8 +118,14 @@ namespace services::document_table::planner {
             case node_type::aggregate_t:
                 // Используем специализированный планировщик для document_table
                 return impl::create_plan_aggregate(context, node, std::move(limit));
-            case node_type::data_t:
+            case node_type::data_t: {
+                // Check if node contains data_chunk (from SQL) or documents (from API)
+                const auto* data = static_cast<const components::logical_plan::node_data_t*>(node.get());
+                if (data->uses_data_chunk()) {
+                    return table::planner::impl::create_plan_data(node);
+                }
                 return collection::planner::impl::create_plan_data(node);
+            }
             case node_type::delete_t:
                 // Используем специализированный планировщик для document_table
                 return impl::create_plan_delete(context, node);

@@ -67,7 +67,10 @@ namespace components::document_table {
         result.reserve(columns_.size());
 
         for (const auto& col : columns_) {
-            result.emplace_back(col.json_path, col.type);
+            // Create a copy of type with alias set to json_path
+            auto col_type = col.type;
+            col_type.set_alias(col.json_path);
+            result.emplace_back(col.json_path, std::move(col_type));
         }
 
         return result;
@@ -92,18 +95,12 @@ namespace components::document_table {
                     auto existing_type = existing_col->type.type();
                     auto new_type = path_info.type;
 
-                    // Проверяем, что типы совпадают
+                    // Проверяем, что типы совпадают - по одному пути может быть только один тип
                     if (existing_type != new_type) {
-                        // UNION SUPPORT: вместо ошибки, создаем/расширяем union
-                        if (existing_col->is_union) {
-                            // Уже union - добавить новый тип если его нет
-                            extend_union_column(path_info.path, new_type);
-                        } else {
-                            // Первое несовпадение - создать union из двух типов
-                            create_union_column(path_info.path, existing_type, new_type);
-                        }
-                        // Схема изменилась - возвращаем обновленную колонку
-                        new_columns.push_back(*get_column_info(path_info.path));
+                        throw std::runtime_error(
+                            "Type mismatch for path '" + path_info.path + "': existing type is " +
+                            std::to_string(static_cast<int>(existing_type)) + ", new type is " +
+                            std::to_string(static_cast<int>(new_type)));
                     }
                 }
                 continue;
