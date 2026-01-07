@@ -593,7 +593,246 @@ case node_type::insert_t: {
 
 ---
 
-## Часть 7: Файлы для изменения
+## Часть 7: Проблема дублирования — dynamic_schema как "свой каталог"
+
+### Что произошло
+
+При создании document_table мы фактически **создали свой мини-каталог** в виде `dynamic_schema`:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    ГЛАВНЫЙ CATALOG                               │
+│  (в dispatcher)                                                  │
+│                                                                  │
+│  computed_schema:                                                │
+│  ├── fields_: versioned_trie<string, complex_logical_type>      │
+│  ├── existing_versions_: map<string, refcounted_entry_t>        │
+│  └── storage_format_: document_table                            │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    "СВОЙ КАТАЛОГ" в document_table               │
+│  (в document_table_storage)                                      │
+│                                                                  │
+│  dynamic_schema:                                                 │
+│  ├── columns_: vector<column_info_t>                            │
+│  ├── path_to_column_: map<string, size_t>                       │
+│  └── type для каждой колонки                                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Почему это плохо
+
+| Проблема | Описание |
+|----------|----------|
+| **Дублирование данных** | Схема хранится в двух местах |
+| **Рассинхронизация** | catalog пустой, dynamic_schema актуальная |
+| **Нарушение архитектуры** | catalog должен быть единственным источником истины |
+| **GET SCHEMA не работает** | catalog не знает о колонках |
+| **Сложность поддержки** | Изменения нужно делать в двух местах |
+
+### Сравнение: что хранят
+
+| Поле | computed_schema (catalog) | dynamic_schema (document_table) |
+|------|---------------------------|--------------------------------|
+| Имя колонки | ✓ fields_ key | ✓ column_info_t.json_path |
+| Тип колонки | ✓ complex_logical_type | ✓ column_info_t.type |
+| Версионирование | ✓ versioned_trie | ✗ нет |
+| Refcount | ✓ refcounted_entry_t | ✗ нет |
+| Индекс колонки | ✗ нет | ✓ column_info_t.column_index |
+| Union types | ✓ в complex_logical_type | ✓ column_info_t.union_types |
+
+### Вывод
+
+**dynamic_schema дублирует computed_schema**, добавляя только `column_index` для маппинга на физические колонки в data_table.
+
+---
+
+## Часть 8: План миграции с dynamic_schema на catalog
+
+### Допущение
+
+> По одному JSON path хранится один тип данных (без union types на первом этапе)
+
+### Что нужно изменить
+
+#### Шаг 1: Передать catalog в document_table_storage
+
+**Проблема:** document_table_storage не имеет доступа к catalog.
+
+**Решение:** Передавать ссылку на computed_schema при операциях.
+
+```cpp
+// Было:
+class document_table_storage_t {
+    std::unique_ptr<dynamic_schema_t> schema_;  // свой каталог
+};
+
+// Станет:
+class document_table_storage_t {
+    // Только маппинг path -> column_index (то, чего нет в catalog)
+    std::pmr::unordered_map<std::string, size_t> path_to_column_index_;
+};
+```
+
+#### Шаг 2: Изменить batch_insert
+
+```cpp
+// Было:
+void batch_insert(documents) {
+    for (doc : documents) {
+        auto new_cols = schema_->evolve(doc);  // локальная схема
+        // ...
+    }
+}
+
+// Станет:
+void batch_insert(documents, computed_schema& catalog_schema) {
+    for (doc : documents) {
+        for (field : doc) {
+            // Проверяем в catalog
+            if (!catalog_schema.has_field(field.path)) {
+                // Добавляем в catalog
+                catalog_schema.append(field.path, field.type);
+                // Добавляем колонку в data_table
+                auto col_idx = table_.add_column(field.type);
+                path_to_column_index_[field.path] = col_idx;
+            }
+        }
+    }
+}
+```
+
+#### Шаг 3: Изменить full_scan
+
+```cpp
+// Было:
+void full_scan::on_execute() {
+    auto& schema = storage_->schema();  // dynamic_schema
+    // ...
+}
+
+// Станет:
+void full_scan::on_execute(const computed_schema& catalog_schema) {
+    // Получаем типы из catalog
+    for (field : catalog_schema.fields()) {
+        auto col_idx = storage_->get_column_index(field.path);
+        // ...
+    }
+}
+```
+
+#### Шаг 4: Передача catalog через цепочку вызовов
+
+```
+dispatcher (имеет catalog_)
+    │
+    ▼
+memory_storage (получает ссылку)
+    │
+    ▼
+executor (получает ссылку)
+    │
+    ▼
+operator_insert/full_scan (получает ссылку)
+    │
+    ▼
+document_table_storage (использует для schema operations)
+```
+
+### Что остаётся в document_table_storage
+
+После миграции в document_table_storage остаётся только:
+
+```cpp
+class document_table_storage_t {
+    // Физическое хранение данных
+    std::unique_ptr<table::data_table_t> table_;
+
+    // Маппинг document_id -> row_id (для O(1) доступа)
+    std::pmr::unordered_map<document_id_t, row_id_t> id_to_row_;
+
+    // Маппинг json_path -> column_index (чего нет в catalog)
+    std::pmr::unordered_map<std::string, size_t> path_to_column_index_;
+
+    // НЕТ dynamic_schema_ - используем catalog
+};
+```
+
+### Порядок миграции
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Этап 1: Синхронизация (не ломает текущий код)                  │
+│                                                                  │
+│  - Добавить обновление catalog в dispatcher::update_catalog()   │
+│  - dynamic_schema остаётся, но catalog тоже обновляется         │
+│  - GET SCHEMA начинает работать                                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Этап 2: Передача catalog в storage                             │
+│                                                                  │
+│  - Добавить параметр computed_schema& в методы storage          │
+│  - Читать типы из catalog вместо dynamic_schema                 │
+│  - dynamic_schema всё ещё существует (fallback)                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Этап 3: Удаление dynamic_schema                                │
+│                                                                  │
+│  - Убрать dynamic_schema_ из document_table_storage             │
+│  - Оставить только path_to_column_index_                        │
+│  - catalog = единственный источник истины                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Диаграмма целевой архитектуры
+
+```
+                         SQL Query
+                             │
+                             ▼
+┌────────────────────────────────────────────────────────────────┐
+│                        DISPATCHER                               │
+│                                                                 │
+│  catalog_                                                       │
+│  └── computed_schema                                            │
+│      ├── fields_: {name:STRING, age:INT, ...}  ◄── ЕДИНСТВЕННЫЙ│
+│      └── storage_format_: document_table            ИСТОЧНИК   │
+│                             │                                   │
+└─────────────────────────────┼───────────────────────────────────┘
+                              │ ссылка на computed_schema
+                              ▼
+┌────────────────────────────────────────────────────────────────┐
+│                      MEMORY_STORAGE                             │
+│                              │                                  │
+└──────────────────────────────┼──────────────────────────────────┘
+                               │
+                               ▼
+┌────────────────────────────────────────────────────────────────┐
+│                        EXECUTOR                                 │
+│                              │                                  │
+└──────────────────────────────┼──────────────────────────────────┘
+                               │
+                               ▼
+┌────────────────────────────────────────────────────────────────┐
+│                  document_table_storage                         │
+│                                                                 │
+│  table_: data_table_t          ◄── физические данные           │
+│  id_to_row_: map<doc_id, row>  ◄── O(1) доступ по _id          │
+│  path_to_column_: map<path, idx> ◄── маппинг path→колонка      │
+│                                                                 │
+│  // НЕТ dynamic_schema_!                                        │
+│  // Типы берём из catalog через переданную ссылку               │
+└────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Часть 9: Файлы для изменения
 
 | Файл | Изменение |
 |------|-----------|
