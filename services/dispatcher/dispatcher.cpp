@@ -319,8 +319,51 @@ namespace services::dispatcher {
                     if (!logic_plan->collection_full_name().empty()) {
                         table_id tid(resource(), logic_plan->collection_full_name());
                         used_format = catalog_.get_table_format(tid);
-                        std::cout << "[DEBUG DISPATCHER] Collection: " << logic_plan->collection_full_name().to_string()
-                                  << ", format from catalog: " << static_cast<int>(used_format) << std::endl << std::flush;
+
+                        // Pre-execution catalog update for document_table INSERT
+                        if (used_format == used_format_t::document_table &&
+                            logic_plan->type() == node_type::insert_t &&
+                            catalog_.table_computes(tid)) {
+                            auto& comp_sch = catalog_.get_computing_table_schema(tid);
+                            std::string type_error;
+
+                            // Extract schema from INSERT data and update catalog with type checking
+                            if (logic_plan->children().size() > 0 &&
+                                logic_plan->children().back()->type() == node_type::data_t) {
+                                auto node_info = reinterpret_cast<node_data_ptr&>(logic_plan->children().back());
+
+                                if (node_info->uses_documents()) {
+                                    for (const auto& doc : node_info->documents()) {
+                                        for (const auto& [key, value] : *doc->json_trie()->as_object()) {
+                                            auto key_val = key->get_mut()->get_string().value();
+                                            auto log_type = components::base::operators::type_from_json(value.get());
+                                            type_error = comp_sch.try_append(std::pmr::string(key_val, resource()), log_type);
+                                            if (!type_error.empty()) {
+                                                break;
+                                            }
+                                        }
+                                        if (!type_error.empty()) {
+                                            break;
+                                        }
+                                    }
+                                } else if (node_info->uses_data_chunk()) {
+                                    const auto& chunk_types = node_info->data_chunk().types();
+                                    for (const auto& col_type : chunk_types) {
+                                        if (col_type.has_alias()) {
+                                            type_error = comp_sch.try_append(
+                                                std::pmr::string(col_type.alias(), resource()), col_type);
+                                            if (!type_error.empty()) {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (!type_error.empty()) {
+                                    error = make_cursor(resource(), error_code_t::schema_error, type_error);
+                                }
+                            }
+                        }
                     } else {
                         // Для запросов без коллекции (raw data) определяем по типу данных
                         used_format = check_result->uses_table_data() ? used_format_t::columns : used_format_t::documents;
@@ -840,6 +883,12 @@ namespace services::dispatcher {
                     break;
                 }
 
+                // Skip catalog update for document_table - already done in execute_plan with type checking
+                if (catalog_.table_computes(id) &&
+                    catalog_.get_computing_table_schema(id).storage_format() == used_format_t::document_table) {
+                    break;
+                }
+
                 std::optional<std::reference_wrapper<computed_schema>> comp_sch;
                 std::optional<std::reference_wrapper<const schema>> sch;
                 if (catalog_.table_computes(id)) {
@@ -858,25 +907,17 @@ namespace services::dispatcher {
                             if (comp_sch.has_value()) {
                                 comp_sch.value().get().append(std::pmr::string(key_val), log_type);
                             }
-                            // else { // todo: type conversion tree
-                            //     auto asserted_type = sch.value().get().find_field(std::pmr::string(key_val));
-                            //     if (asserted_type != log_type) {
-                            //         error(log_,
-                            //               "Schema failure: inserted value of incorrect type into column {}",
-                            //               std::string(key_val));
-                            //         result_storage_[session] =
-                            //             make_cursor(resource(), error_code_t::other_error, "Schema failure");
-                            //     }
-                            // }
                         }
                     }
                     break;
                 }
-                // Handle document_table storage with data_chunk
+                // Handle data_chunk for non-document_table formats
                 if (node_info->uses_data_chunk() && comp_sch.has_value()) {
                     const auto& chunk_types = node_info->data_chunk().types();
                     for (const auto& col_type : chunk_types) {
-                        comp_sch.value().get().append(std::pmr::string(col_type.alias(), resource()), col_type);
+                        if (col_type.has_alias()) {
+                            comp_sch.value().get().append(std::pmr::string(col_type.alias(), resource()), col_type);
+                        }
                     }
                     break;
                 }

@@ -220,33 +220,53 @@ TEST_CASE("dispatcher::computed_operations") {
         REQUIRE(count.back().type() == logical_type::BIGINT);
     });
 
+    // Type conflict: name was STRING but now inserting INT, count was BIGINT but now inserting STRING
+    // For document_table: one path = one type, so type conflicts should fail
     test.execute_sql("INSERT INTO test.test (_id, name, count) VALUES ('" + gen_id(100) + "', 10, 'test');");
     test.step_with_assertion([&id](cursor_t_ptr cur, catalog& catalog) {
+        // Type mismatch should cause error
+        REQUIRE(cur->is_error());
+        REQUIRE(cur->get_error().type == error_code_t::schema_error);
+
+        // Original types should remain unchanged
         auto name = catalog.get_computing_table_schema(id).find_field_versions("name");
         auto count = catalog.get_computing_table_schema(id).find_field_versions("count");
 
+        REQUIRE(name.size() == 1);
+        REQUIRE(name.back().type() == logical_type::STRING_LITERAL);
+
+        REQUIRE(count.size() == 1);
+        REQUIRE(count.back().type() == logical_type::BIGINT);
+    });
+
+    // Valid INSERT with same types should succeed
+    test.execute_sql("INSERT INTO test.test (_id, name, count) VALUES ('" + gen_id(100) + "', 'Name 100', 100);");
+    test.step_with_assertion([&id](cursor_t_ptr cur, catalog& catalog) {
         REQUIRE(cur->is_success());
 
-        REQUIRE(name.size() == 2);
-        REQUIRE(name.back().type() == logical_type::BIGINT);
+        auto name = catalog.get_computing_table_schema(id).find_field_versions("name");
+        auto count = catalog.get_computing_table_schema(id).find_field_versions("count");
 
-        REQUIRE(count.size() == 2);
-        REQUIRE(count.back().type() == logical_type::STRING_LITERAL);
+        REQUIRE(name.size() == 1);
+        REQUIRE(name.back().type() == logical_type::STRING_LITERAL);
+
+        REQUIRE(count.size() == 1);
+        REQUIRE(count.back().type() == logical_type::BIGINT);
     });
 
     test.execute_sql("DELETE FROM test.test where count < 100;");
     test.step_with_assertion([&id](cursor_t_ptr cur, catalog& catalog) {
+        REQUIRE(cur->is_success());
+
+        // Types should remain, just fewer rows
         auto name = catalog.get_computing_table_schema(id).find_field_versions("name");
         auto count = catalog.get_computing_table_schema(id).find_field_versions("count");
 
-        REQUIRE(cur->is_success());
-
-        // other versions were deleted
         REQUIRE(name.size() == 1);
-        REQUIRE(name.back().type() == logical_type::BIGINT);
+        REQUIRE(name.back().type() == logical_type::STRING_LITERAL);
 
         REQUIRE(count.size() == 1);
-        REQUIRE(count.back().type() == logical_type::STRING_LITERAL);
+        REQUIRE(count.back().type() == logical_type::BIGINT);
     });
 
     test.execute_sql("DELETE FROM test.test");

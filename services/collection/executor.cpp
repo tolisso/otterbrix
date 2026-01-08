@@ -92,23 +92,16 @@ namespace services::collection::executor {
         trace(log_, "executor::execute_plan, session: {}", session.data());
 
         // TODO: this does not handle cross documents/columns operations
-        // DEBUG: проверим какой формат приходит
-        std::cout << "[DEBUG EXECUTOR] data_format=" << static_cast<int>(data_format)
-                  << " (0=docs, 1=cols, 2=doc_table)" << std::endl << std::flush;
-
         components::base::operators::operator_ptr plan;
         if (data_format == components::catalog::used_format_t::documents) {
-            std::cout << "[DEBUG EXECUTOR] Using collection::planner" << std::endl << std::flush;
             plan = collection::planner::create_plan(context_storage,
                                                     logical_plan,
                                                     components::logical_plan::limit_t::unlimit());
         } else if (data_format == components::catalog::used_format_t::columns) {
-            std::cout << "[DEBUG EXECUTOR] Using table::planner" << std::endl << std::flush;
             plan = table::planner::create_plan(context_storage,
                                                logical_plan,
                                                components::logical_plan::limit_t::unlimit());
         } else if (data_format == components::catalog::used_format_t::document_table) {
-            std::cout << "[DEBUG EXECUTOR] Using document_table::planner" << std::endl << std::flush;
             plan = document_table::planner::create_plan(context_storage,
                                                         logical_plan,
                                                         components::logical_plan::limit_t::unlimit());

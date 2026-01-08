@@ -101,4 +101,68 @@ namespace components::catalog {
     used_format_t computed_schema::storage_format() const {
         return storage_format_;
     }
+
+    std::string computed_schema::try_append(const std::pmr::string& json, const types::complex_logical_type& type) {
+        // Check if field already exists with a different type
+        if (auto it = existing_versions_.find(json); it != existing_versions_.end()) {
+            auto& versioned_value = it->second.get();
+            if (auto id = versioned_value.latest_version_id(); static_cast<bool>(id)) {
+                auto& existing_version = versioned_value.get_version(*id);
+                if (existing_version.is_alive()) {
+                    // Field exists, check type compatibility
+                    auto existing_type = existing_version.value.type();
+                    auto new_type = type.type();
+                    if (existing_type != new_type) {
+                        return "Type mismatch for path '" + std::string(json) +
+                               "': existing type is " + std::to_string(static_cast<int>(existing_type)) +
+                               ", new type is " + std::to_string(static_cast<int>(new_type));
+                    }
+                }
+            }
+        }
+
+        // No conflict, proceed with append
+        append(std::pmr::string(json), type);
+        return "";
+    }
+
+    std::vector<std::pair<std::string, types::complex_logical_type>> computed_schema::get_column_definitions() const {
+        std::vector<std::pair<std::string, types::complex_logical_type>> result;
+        result.reserve(existing_versions_.size());
+
+        for (const auto& [name, entry] : existing_versions_) {
+            auto& v = entry.get();
+            if (auto id = v.latest_version_id(); static_cast<bool>(id) && v.get_version(*id).is_alive()) {
+                auto col_type = v.get_version(id.value()).value;
+                col_type.set_alias(name.c_str());
+                result.emplace_back(std::string(name), col_type);
+            }
+        }
+
+        return result;
+    }
+
+    bool computed_schema::has_field(const std::pmr::string& name) const {
+        auto it = existing_versions_.find(name);
+        if (it == existing_versions_.end()) {
+            return false;
+        }
+        auto& v = it->second.get();
+        if (auto id = v.latest_version_id(); static_cast<bool>(id)) {
+            return v.get_version(*id).is_alive();
+        }
+        return false;
+    }
+
+    types::complex_logical_type computed_schema::get_field_type(const std::pmr::string& name) const {
+        auto it = existing_versions_.find(name);
+        if (it == existing_versions_.end()) {
+            return types::complex_logical_type(types::logical_type::NA);
+        }
+        auto& v = it->second.get();
+        if (auto id = v.latest_version_id(); static_cast<bool>(id) && v.get_version(*id).is_alive()) {
+            return v.get_version(id.value()).value;
+        }
+        return types::complex_logical_type(types::logical_type::NA);
+    }
 } // namespace components::catalog

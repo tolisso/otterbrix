@@ -95,12 +95,18 @@ namespace components::document_table {
                     auto existing_type = existing_col->type.type();
                     auto new_type = path_info.type;
 
-                    // Проверяем, что типы совпадают - по одному пути может быть только один тип
+                    // Проверяем, что типы совпадают
                     if (existing_type != new_type) {
-                        throw std::runtime_error(
-                            "Type mismatch for path '" + path_info.path + "': existing type is " +
-                            std::to_string(static_cast<int>(existing_type)) + ", new type is " +
-                            std::to_string(static_cast<int>(new_type)));
+                        // UNION SUPPORT: вместо ошибки, создаем/расширяем union
+                        if (existing_col->is_union) {
+                            // Уже union - добавить новый тип если его нет
+                            extend_union_column(path_info.path, new_type);
+                        } else {
+                            // Первое несовпадение - создать union из двух типов
+                            create_union_column(path_info.path, existing_type, new_type);
+                        }
+                        // Схема изменилась - возвращаем обновленную колонку
+                        new_columns.push_back(*get_column_info(path_info.path));
                     }
                 }
                 continue;

@@ -44,10 +44,14 @@ namespace components::sql::transform {
         }
 
         if (columns.empty()) {
+            // For schema-less tables, default to document_table format if not explicitly specified
+            auto effective_format = (storage_format == components::catalog::used_format_t::undefined)
+                                        ? components::catalog::used_format_t::document_table
+                                        : storage_format;
             return logical_plan::make_node_create_collection(resource_,
                                                             rangevar_to_collection(node.relation),
                                                             std::pmr::vector<complex_logical_type>(resource_),
-                                                            storage_format);
+                                                            effective_format);
         }
 
         return logical_plan::make_node_create_collection(resource_,
