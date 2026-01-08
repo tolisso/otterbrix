@@ -2,7 +2,6 @@ project(document_table)
 
 set(${PROJECT_NAME}_SOURCES
         json_path_extractor.cpp
-        dynamic_schema.cpp
         document_table_storage.cpp
 )
 

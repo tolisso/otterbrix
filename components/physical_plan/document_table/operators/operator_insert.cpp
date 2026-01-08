@@ -11,7 +11,7 @@ namespace components::document_table::operators {
         if (!left_ || !left_->output()) {
             // Create empty output
             auto& storage = context_->document_table_storage().storage();
-            auto column_defs = storage.schema().to_column_definitions();
+            auto column_defs = storage.to_column_definitions();
             std::pmr::vector<types::complex_logical_type> output_types(context_->resource());
             output_types.reserve(column_defs.size());
             for (const auto& col_def : column_defs) {
@@ -119,7 +119,7 @@ namespace components::document_table::operators {
             }
 
             // Create output with current schema
-            auto column_defs = storage.schema().to_column_definitions();
+            auto column_defs = storage.to_column_definitions();
             std::pmr::vector<types::complex_logical_type> output_types(context_->resource());
             output_types.reserve(column_defs.size());
             for (const auto& col_def : column_defs) {
@@ -160,7 +160,7 @@ namespace components::document_table::operators {
         // Handle documents input (from API)
         if (!left_->output()->uses_documents()) {
             // No valid input, create empty output
-            auto column_defs = storage.schema().to_column_definitions();
+            auto column_defs = storage.to_column_definitions();
             std::pmr::vector<types::complex_logical_type> output_types(context_->resource());
             output_types.reserve(column_defs.size());
             for (const auto& col_def : column_defs) {
@@ -213,7 +213,7 @@ namespace components::document_table::operators {
         }
 
         // Create output with the current schema
-        auto column_defs = storage.schema().to_column_definitions();
+        auto column_defs = storage.to_column_definitions();
         std::pmr::vector<types::complex_logical_type> output_types(context_->resource());
         output_types.reserve(column_defs.size());
         for (const auto& col_def : column_defs) {

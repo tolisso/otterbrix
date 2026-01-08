@@ -27,9 +27,9 @@ namespace components::document_table::operators {
             return *storage().table();
         }
 
-        // Get column types from dynamic schema
+        // Get column types from storage
         std::pmr::vector<types::complex_logical_type> get_column_types() {
-            auto column_defs = storage().schema().to_column_definitions();
+            auto column_defs = storage().to_column_definitions();
             std::pmr::vector<types::complex_logical_type> types(context_->resource());
             types.reserve(column_defs.size());
             for (const auto& col_def : column_defs) {

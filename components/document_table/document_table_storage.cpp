@@ -5,37 +5,28 @@ namespace components::document_table {
 
     namespace {
         // Convert SQL-safe column name back to document API path
-        // "kind" -> "/kind"
-        // "commit_dot_operation" -> "/commit/operation"
-        // "field_arr0_" -> "/field[0]"
         std::string column_name_to_document_path(const std::string& column_name) {
             std::string result = "/";
             size_t i = 0;
             while (i < column_name.size()) {
-                // Check for "_dot_"
                 if (i + 5 <= column_name.size() && column_name.substr(i, 5) == "_dot_") {
                     result += '/';
                     i += 5;
-                }
-                // Check for "_arr" followed by digit(s) and "_"
-                else if (i + 4 <= column_name.size() && 
-                         column_name.substr(i, 4) == "_arr" && 
-                         i + 4 < column_name.size() && 
+                } else if (i + 4 <= column_name.size() &&
+                         column_name.substr(i, 4) == "_arr" &&
+                         i + 4 < column_name.size() &&
                          std::isdigit(column_name[i + 4])) {
                     result += '[';
                     i += 4;
-                    // Read all digits
                     while (i < column_name.size() && std::isdigit(column_name[i])) {
                         result += column_name[i];
                         i++;
                     }
                     result += ']';
-                    // Skip trailing "_" if present
                     if (i < column_name.size() && column_name[i] == '_') {
                         i++;
                     }
-                }
-                else {
+                } else {
                     result += column_name[i];
                     i++;
                 }
@@ -48,13 +39,98 @@ namespace components::document_table {
                                                        table::storage::block_manager_t& block_manager)
         : resource_(resource)
         , block_manager_(block_manager)
-        , schema_(std::make_unique<dynamic_schema_t>(resource))
+        , columns_(resource)
+        , path_to_index_(resource)
+        , extractor_(std::make_unique<json_path_extractor_t>(resource))
         , id_to_row_(10, document_id_hash_t{}, std::equal_to<document::document_id_t>{}, resource)
         , next_row_id_(0) {
 
-        // Создаем начальную таблицу с минимальной схемой (_id колонка)
-        auto column_defs = schema_->to_column_definitions();
+        // Add _id column
+        types::complex_logical_type id_type(types::logical_type::STRING_LITERAL);
+        id_type.set_alias("_id");
+        add_column("_id", id_type);
+
+        // Create initial table with _id column
+        auto column_defs = to_column_definitions();
         table_ = std::make_unique<table::data_table_t>(resource_, block_manager_, std::move(column_defs));
+    }
+
+    // Column management methods
+    bool document_table_storage_t::has_column(const std::string& json_path) const {
+        return path_to_index_.find(json_path) != path_to_index_.end();
+    }
+
+    const column_info_t* document_table_storage_t::get_column_info(const std::string& json_path) const {
+        auto it = path_to_index_.find(json_path);
+        if (it == path_to_index_.end()) {
+            return nullptr;
+        }
+        return &columns_[it->second];
+    }
+
+    const column_info_t* document_table_storage_t::get_column_by_index(size_t index) const {
+        if (index >= columns_.size()) {
+            return nullptr;
+        }
+        return &columns_[index];
+    }
+
+    void document_table_storage_t::add_column(const std::string& json_path,
+                                              const types::complex_logical_type& type,
+                                              bool is_array_element,
+                                              size_t array_index) {
+        if (has_column(json_path)) {
+            return;
+        }
+
+        size_t new_index = columns_.size();
+        column_info_t new_col;
+        new_col.json_path = json_path;
+        new_col.type = type;
+        new_col.column_index = new_index;
+        new_col.is_array_element = is_array_element;
+        new_col.array_index = array_index;
+
+        columns_.push_back(std::move(new_col));
+        path_to_index_[json_path] = new_index;
+    }
+
+    std::vector<table::column_definition_t> document_table_storage_t::to_column_definitions() const {
+        std::vector<table::column_definition_t> result;
+        result.reserve(columns_.size());
+
+        for (const auto& col : columns_) {
+            auto col_type = col.type;
+            col_type.set_alias(col.json_path);
+            result.emplace_back(col.json_path, std::move(col_type));
+        }
+
+        return result;
+    }
+
+    std::pmr::vector<column_info_t> document_table_storage_t::evolve_from_document(const document::document_ptr& doc) {
+        std::pmr::vector<column_info_t> new_columns(resource_);
+
+        if (!doc || !doc->is_valid()) {
+            return new_columns;
+        }
+
+        auto extracted_paths = extractor_->extract_paths(doc);
+
+        for (const auto& path_info : extracted_paths) {
+            // Skip existing columns (type is checked in dispatcher)
+            if (has_column(path_info.path)) {
+                continue;
+            }
+
+            types::complex_logical_type col_type(path_info.type);
+            col_type.set_alias(path_info.path);
+
+            add_column(path_info.path, col_type, path_info.is_array, path_info.array_index);
+            new_columns.push_back(columns_.back());
+        }
+
+        return new_columns;
     }
 
     void document_table_storage_t::insert(const document::document_id_t& id, const document::document_ptr& doc) {
@@ -62,31 +138,23 @@ namespace components::document_table {
             return;
         }
 
-        // 1. Проверяем, нужна ли эволюция схемы
-        auto new_columns = schema_->evolve(doc);
-
-        // 2. Если есть новые колонки - расширяем таблицу
+        auto new_columns = evolve_from_document(doc);
         if (!new_columns.empty()) {
             evolve_schema(new_columns);
         }
 
-        // 3. Конвертируем документ в row
         auto row = document_to_row(doc);
 
-        // 4. Вставляем в таблицу
         table::table_append_state state(resource_);
         table_->append_lock(state);
         table_->initialize_append(state);
         table_->append(row, state);
         table_->finalize_append(state);
 
-        // 5. Сохраняем маппинг
         id_to_row_[id] = next_row_id_++;
     }
 
     document::document_ptr document_table_storage_t::get(const document::document_id_t& id) {
-        // TODO: реализовать конвертацию row -> document
-        // Пока возвращаем nullptr
         return nullptr;
     }
 
@@ -96,17 +164,14 @@ namespace components::document_table {
             return;
         }
 
-        // Получаем row_id
         size_t row_id = it->second;
 
-        // Удаляем из таблицы
         vector::vector_t row_ids(resource_, types::logical_type::UBIGINT);
         row_ids.set_value(0, types::logical_value_t(static_cast<uint64_t>(row_id)));
 
         auto delete_state = table_->initialize_delete({});
         table_->delete_rows(*delete_state, row_ids, 1);
 
-        // Удаляем из маппинга
         id_to_row_.erase(it);
     }
 
@@ -133,71 +198,38 @@ namespace components::document_table {
         return true;
     }
 
-    bool document_table_storage_t::needs_evolution(const document::document_ptr& doc) const {
-        auto extracted_paths = schema_->extractor().extract_paths(doc);
-
-        for (const auto& path_info : extracted_paths) {
-            if (!schema_->has_path(path_info.path)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     void document_table_storage_t::evolve_schema(const std::pmr::vector<column_info_t>& new_columns) {
-        // Инкрементально добавляем новые колонки
-        // Используем конструктор data_table_t(parent, new_column) который переиспользует
-        // существующие row_groups через shared_ptr (O(1) вместо O(N))
-        
         for (const auto& col_info : new_columns) {
-            // Создаем NULL default значение для новой колонки с правильным типом
-            // Если колонка nullable (union с NULL), создаем значение того же union типа
             auto default_value = std::make_unique<types::logical_value_t>(col_info.type);
-            
-            // Создаем column_definition для новой колонки с default значением
             table::column_definition_t new_column_def(col_info.json_path, col_info.type, std::move(default_value));
-            
-            // Создаем новую таблицу, добавляя одну колонку к существующей
-            // Это НЕ копирует данные - только переиспользует row_groups через shared_ptr
             auto new_table = std::make_unique<table::data_table_t>(*table_, new_column_def);
-            
-            // Заменяем старую таблицу новой
             table_ = std::move(new_table);
         }
     }
 
-
     vector::data_chunk_t document_table_storage_t::document_to_row(const document::document_ptr& doc) {
-        // Создаем chunk на одну строку
         auto types = table_->copy_types();
         vector::data_chunk_t chunk(resource_, types);
         chunk.set_cardinality(1);
 
-        // Проходим по всем колонкам схемы
-        for (size_t i = 0; i < schema_->column_count(); ++i) {
-            const auto* col_info = schema_->get_column_by_index(i);
+        for (size_t i = 0; i < column_count(); ++i) {
+            const auto* col_info = get_column_by_index(i);
             auto& vec = chunk.data[i];
 
-            // Специальная обработка для _id
             if (col_info->json_path == "_id") {
-                // Получаем document_id из документа
                 auto doc_id = document::get_document_id(doc);
                 std::string id_str(reinterpret_cast<const char*>(doc_id.data()), doc_id.size);
                 vec.set_value(0, types::logical_value_t(id_str));
                 continue;
             }
 
-            // Convert column name to document path
             std::string doc_path = column_name_to_document_path(col_info->json_path);
-            
-            // Проверяем, есть ли это поле в документе
+
             if (!doc->is_exists(doc_path)) {
                 vec.set_null(0, true);
                 continue;
             }
 
-            // Извлекаем значение в зависимости от типа
             switch (col_info->type.type()) {
             case types::logical_type::BOOLEAN:
                 if (doc->is_bool(doc_path)) {
@@ -256,31 +288,6 @@ namespace components::document_table {
                 }
                 break;
 
-            case types::logical_type::UNION:
-                // ВРЕМЕННОЕ РЕШЕНИЕ: для UNION колонок сохраняем данные в их фактическом типе
-                // Schema отслеживает что колонка может содержать разные типы
-                if (col_info->is_union) {
-                    // Определяем фактический тип значения в документе
-                    auto actual_type = detect_value_type_in_document(doc, col_info->json_path);
-
-                    if (actual_type == types::logical_type::NA) {
-                        vec.set_null(0, true);
-                        break;
-                    }
-
-                    // Извлекаем значение нужного типа и сохраняем напрямую
-                    auto value = extract_value_from_document(doc, col_info->json_path, actual_type);
-
-                    if (value.is_null()) {
-                        vec.set_null(0, true);
-                    } else {
-                        vec.set_value(0, std::move(value));
-                    }
-                } else {
-                    vec.set_null(0, true);
-                }
-                break;
-
             default:
                 vec.set_null(0, true);
                 break;
@@ -290,37 +297,26 @@ namespace components::document_table {
         return chunk;
     }
 
-    document::document_ptr document_table_storage_t::row_to_document(const vector::data_chunk_t& row,
-                                                                      size_t row_idx) {
+    document::document_ptr document_table_storage_t::row_to_document(const vector::data_chunk_t& row, size_t row_idx) {
         if (row_idx >= row.size()) {
             return nullptr;
         }
-        
+
         auto doc = document::make_document(resource_);
-        const auto& columns = schema_->columns();
-        
-        // Итерируем по всем колонкам и восстанавливаем значения
-        for (size_t col_idx = 0; col_idx < columns.size() && col_idx < row.column_count(); ++col_idx) {
-            const auto& col_info = columns[col_idx];
-            
-            // Получаем значение из chunk
+
+        for (size_t col_idx = 0; col_idx < columns_.size() && col_idx < row.column_count(); ++col_idx) {
+            const auto& col_info = columns_[col_idx];
             auto value = row.value(col_idx, row_idx);
-            
-            // Пропускаем NULL значения
+
             if (value.is_null()) {
                 continue;
             }
-            
-            // Устанавливаем значение в документ по JSON path
-            const std::string& path = col_info.json_path;
-            
-            // Добавляем "/" в начало если нужно
-            std::string doc_path = path;
+
+            std::string doc_path = col_info.json_path;
             if (!doc_path.empty() && doc_path[0] != '/') {
                 doc_path = "/" + doc_path;
             }
-            
-            // Устанавливаем значение в зависимости от типа
+
             switch (value.type().type()) {
             case types::logical_type::BOOLEAN:
                 doc->set(doc_path, value.value<bool>());
@@ -359,44 +355,28 @@ namespace components::document_table {
                 doc->set(doc_path, std::string(value.value<std::string_view>()));
                 break;
             default:
-                // Неподдерживаемый тип, пропускаем
                 break;
             }
         }
-        
+
         return doc;
     }
 
     types::logical_type document_table_storage_t::detect_value_type_in_document(const document::document_ptr& doc,
                                                                                 const std::string& json_path) {
         std::string doc_path = column_name_to_document_path(json_path);
-        
+
         if (!doc || !doc->is_exists(doc_path)) {
             return types::logical_type::NA;
         }
 
-        // Проверяем типы в порядке приоритета
-        if (doc->is_bool(doc_path)) {
-            return types::logical_type::BOOLEAN;
-        }
-        if (doc->is_int(doc_path)) {
-            return types::logical_type::INTEGER;
-        }
-        if (doc->is_long(doc_path)) {
-            return types::logical_type::BIGINT;
-        }
-        if (doc->is_ulong(doc_path)) {
-            return types::logical_type::UBIGINT;
-        }
-        if (doc->is_double(doc_path)) {
-            return types::logical_type::DOUBLE;
-        }
-        if (doc->is_float(doc_path)) {
-            return types::logical_type::FLOAT;
-        }
-        if (doc->is_string(doc_path)) {
-            return types::logical_type::STRING_LITERAL;
-        }
+        if (doc->is_bool(doc_path)) return types::logical_type::BOOLEAN;
+        if (doc->is_int(doc_path)) return types::logical_type::INTEGER;
+        if (doc->is_long(doc_path)) return types::logical_type::BIGINT;
+        if (doc->is_ulong(doc_path)) return types::logical_type::UBIGINT;
+        if (doc->is_double(doc_path)) return types::logical_type::DOUBLE;
+        if (doc->is_float(doc_path)) return types::logical_type::FLOAT;
+        if (doc->is_string(doc_path)) return types::logical_type::STRING_LITERAL;
 
         return types::logical_type::NA;
     }
@@ -409,59 +389,38 @@ namespace components::document_table {
         std::string doc_path = column_name_to_document_path(json_path);
 
         if (!doc || !doc->is_exists(doc_path)) {
-            return types::logical_value_t(); // null value
+            return types::logical_value_t();
         }
 
-        // Извлекаем значение в зависимости от ожидаемого типа
         switch (expected_type) {
         case types::logical_type::BOOLEAN:
-            if (doc->is_bool(doc_path)) {
-                return types::logical_value_t(doc->get_bool(doc_path));
-            }
+            if (doc->is_bool(doc_path)) return types::logical_value_t(doc->get_bool(doc_path));
             break;
-
         case types::logical_type::INTEGER:
-            if (doc->is_int(doc_path)) {
-                return types::logical_value_t(doc->get_int(doc_path));
-            }
+            if (doc->is_int(doc_path)) return types::logical_value_t(doc->get_int(doc_path));
             break;
-
         case types::logical_type::BIGINT:
-            if (doc->is_long(doc_path)) {
-                return types::logical_value_t(doc->get_long(doc_path));
-            }
+            if (doc->is_long(doc_path)) return types::logical_value_t(doc->get_long(doc_path));
             break;
-
         case types::logical_type::UBIGINT:
-            if (doc->is_ulong(doc_path)) {
-                return types::logical_value_t(doc->get_ulong(doc_path));
-            }
+            if (doc->is_ulong(doc_path)) return types::logical_value_t(doc->get_ulong(doc_path));
             break;
-
         case types::logical_type::DOUBLE:
-            if (doc->is_double(doc_path)) {
-                return types::logical_value_t(doc->get_double(doc_path));
-            }
+            if (doc->is_double(doc_path)) return types::logical_value_t(doc->get_double(doc_path));
             break;
-
         case types::logical_type::FLOAT:
-            if (doc->is_float(doc_path)) {
-                return types::logical_value_t(doc->get_float(doc_path));
-            }
+            if (doc->is_float(doc_path)) return types::logical_value_t(doc->get_float(doc_path));
             break;
-
         case types::logical_type::STRING_LITERAL:
             if (doc->is_string(doc_path)) {
                 std::string str_val(doc->get_string(doc_path));
                 return types::logical_value_t(str_val);
             }
             break;
-
         default:
             break;
         }
 
-        // Если тип не совпал, возвращаем null
         return types::logical_value_t();
     }
 
@@ -473,27 +432,23 @@ namespace components::document_table {
             return result;
         }
 
-        // Извлекаем все пути из документа
-        auto extracted_paths = schema_->extractor().extract_paths(doc);
+        auto extracted_paths = extractor_->extract_paths(doc);
 
-        // Для каждого пути извлекаем значение
         for (const auto& path_info : extracted_paths) {
             std::string doc_path = column_name_to_document_path(path_info.path);
 
             if (!doc->is_exists(doc_path)) {
-                result[path_info.path] = types::logical_value_t(); // NULL value
+                result[path_info.path] = types::logical_value_t();
                 continue;
             }
 
-            // Определяем фактический тип значения
             auto actual_type = detect_value_type_in_document(doc, path_info.path);
 
             if (actual_type == types::logical_type::NA) {
-                result[path_info.path] = types::logical_value_t(); // NULL value
+                result[path_info.path] = types::logical_value_t();
                 continue;
             }
 
-            // Извлекаем значение
             auto value = extract_value_from_document(doc, path_info.path, actual_type);
             result[path_info.path] = std::move(value);
         }
@@ -508,58 +463,51 @@ namespace components::document_table {
             return;
         }
 
-        // Шаг 1: Вычисляем все пути из всех документов и эволюционируем схему
+        // Step 1: Evolve schema from all documents
         for (const auto& [id, doc] : documents) {
             if (!doc || !doc->is_valid()) {
                 continue;
             }
 
-            auto new_columns = schema_->evolve(doc);
+            auto new_columns = evolve_from_document(doc);
             if (!new_columns.empty()) {
                 evolve_schema(new_columns);
             }
         }
 
-        // Шаг 2: Создаем таблицу нужного размера с батчами по 1024 документов (оптимальный размер для vector capacity)
+        // Step 2: Batch insert
         constexpr size_t BATCH_SIZE = 1024;
 
         for (size_t batch_start = 0; batch_start < documents.size(); batch_start += BATCH_SIZE) {
             size_t batch_end = std::min(batch_start + BATCH_SIZE, documents.size());
             size_t batch_count = batch_end - batch_start;
 
-            // Создаем chunk на батч (умещается в DEFAULT_VECTOR_CAPACITY = 1024)
             auto types = table_->copy_types();
             vector::data_chunk_t batch_chunk(resource_, types);
             batch_chunk.set_cardinality(batch_count);
 
-            // Шаг 3: Заполняем батч данными
             for (size_t batch_idx = 0; batch_idx < batch_count; ++batch_idx) {
                 const auto& [id, doc] = documents[batch_start + batch_idx];
 
                 if (!doc || !doc->is_valid()) {
-                    // Заполняем всю строку NULL значениями
-                    for (size_t col_idx = 0; col_idx < schema_->column_count(); ++col_idx) {
+                    for (size_t col_idx = 0; col_idx < column_count(); ++col_idx) {
                         batch_chunk.data[col_idx].set_null(batch_idx, true);
                     }
                     continue;
                 }
 
-                // Извлекаем все значения для документа
                 auto path_values = extract_path_values(doc);
 
-                // Проходим по всем колонкам схемы и заполняем значения
-                for (size_t col_idx = 0; col_idx < schema_->column_count(); ++col_idx) {
-                    const auto* col_info = schema_->get_column_by_index(col_idx);
+                for (size_t col_idx = 0; col_idx < column_count(); ++col_idx) {
+                    const auto* col_info = get_column_by_index(col_idx);
                     auto& vec = batch_chunk.data[col_idx];
 
-                    // Специальная обработка для _id
                     if (col_info->json_path == "_id") {
                         std::string id_str(reinterpret_cast<const char*>(id.data()), id.size);
                         vec.set_value(batch_idx, types::logical_value_t(id_str));
                         continue;
                     }
 
-                    // Ищем значение в извлеченных данных
                     auto it = path_values.find(col_info->json_path);
                     if (it != path_values.end() && !it->second.is_null()) {
                         vec.set_value(batch_idx, it->second);
@@ -569,14 +517,12 @@ namespace components::document_table {
                 }
             }
 
-            // Шаг 4: Вставляем батч в таблицу
             table::table_append_state state(resource_);
             table_->append_lock(state);
             table_->initialize_append(state);
             table_->append(batch_chunk, state);
             table_->finalize_append(state);
 
-            // Шаг 5: Сохраняем маппинг для всех документов в батче
             for (size_t batch_idx = 0; batch_idx < batch_count; ++batch_idx) {
                 const auto& [id, doc] = documents[batch_start + batch_idx];
                 id_to_row_[id] = next_row_id_++;

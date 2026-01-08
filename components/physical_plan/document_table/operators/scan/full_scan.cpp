@@ -81,8 +81,8 @@ namespace components::document_table::operators {
         // Get storage and schema
         auto& storage = context_->document_table_storage().storage();
 
-        // Get column definitions from schema
-        auto column_defs = storage.schema().to_column_definitions();
+        // Get column definitions from storage
+        auto column_defs = storage.to_column_definitions();
 
         // Build full types for filter (filter needs original column indices)
         std::pmr::vector<types::complex_logical_type> all_types(context_->resource());

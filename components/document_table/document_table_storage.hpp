@@ -1,10 +1,11 @@
 #pragma once
 
-#include "dynamic_schema.hpp"
+#include "json_path_extractor.hpp"
 #include <functional>
 #include <components/document/document.hpp>
 #include <components/document/document_id.hpp>
 #include <components/table/data_table.hpp>
+#include <components/table/column_definition.hpp>
 #include <components/table/storage/in_memory_block_manager.hpp>
 #include <components/vector/data_chunk.hpp>
 #include <memory>
@@ -13,10 +14,18 @@
 
 namespace components::document_table {
 
-    // Хэш-функция для document_id_t
+    // Column information - simple struct for storing column metadata
+    struct column_info_t {
+        std::string json_path;               // JSON path (e.g., "user.address.city")
+        types::complex_logical_type type;    // Column type
+        size_t column_index = 0;             // Column index in table
+        bool is_array_element = false;       // Is array element?
+        size_t array_index = 0;              // Array index
+    };
+
+    // Hash function for document_id_t
     struct document_id_hash_t {
         std::size_t operator()(const document::document_id_t& id) const {
-            // Используем hash для string_view на основе данных
             return std::hash<std::string_view>{}(std::string_view(reinterpret_cast<const char*>(id.data()), id.size));
         }
     };
@@ -26,57 +35,69 @@ namespace components::document_table {
         explicit document_table_storage_t(std::pmr::memory_resource* resource,
                                           table::storage::block_manager_t& block_manager);
 
-        // Вставка документа с автоматической эволюцией схемы
+        // Insert document
         void insert(const document::document_id_t& id, const document::document_ptr& doc);
 
-        // Batch вставка документов с оптимизацией
+        // Batch insert documents
         void batch_insert(const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents);
 
-        // Получение документа по ID
+        // Get document by ID
         document::document_ptr get(const document::document_id_t& id);
 
-        // Удаление документа
+        // Remove document
         void remove(const document::document_id_t& id);
 
-        // Проверка существования
+        // Check existence
         bool contains(const document::document_id_t& id) const;
 
-        // Сканирование таблицы
+        // Scan table
         void scan(vector::data_chunk_t& output, table::table_scan_state& state);
 
-        // Инициализация сканирования
+        // Initialize scan
         void initialize_scan(table::table_scan_state& state,
                              const std::vector<table::storage_index_t>& column_ids,
                              const table::table_filter_t* filter = nullptr);
 
-        // Доступ к схеме
-        dynamic_schema_t& schema() { return *schema_; }
-        const dynamic_schema_t& schema() const { return *schema_; }
+        // Column management (replaces dynamic_schema)
+        bool has_column(const std::string& json_path) const;
+        const column_info_t* get_column_info(const std::string& json_path) const;
+        const column_info_t* get_column_by_index(size_t index) const;
+        const std::pmr::vector<column_info_t>& columns() const { return columns_; }
+        size_t column_count() const { return columns_.size(); }
+        std::vector<table::column_definition_t> to_column_definitions() const;
+        json_path_extractor_t& extractor() { return *extractor_; }
+        const json_path_extractor_t& extractor() const { return *extractor_; }
 
-        // Доступ к таблице
+        // Access to table
         table::data_table_t* table() { return table_.get(); }
         const table::data_table_t* table() const { return table_.get(); }
 
-        // Количество документов
+        // Document count
         size_t size() const { return id_to_row_.size(); }
 
-        // Получение row_id по document_id
+        // Get row_id by document_id
         bool get_row_id(const document::document_id_t& id, size_t& row_id) const;
 
     private:
-        // Проверка, нужна ли эволюция схемы
-        bool needs_evolution(const document::document_ptr& doc) const;
+        // Add new column
+        void add_column(const std::string& json_path,
+                        const types::complex_logical_type& type,
+                        bool is_array_element = false,
+                        size_t array_index = 0);
 
-        // Эволюция схемы (инкрементальное добавление колонок)
+        // Evolve schema from document - adds new columns
+        std::pmr::vector<column_info_t> evolve_from_document(const document::document_ptr& doc);
+
+        // Evolve schema (incremental column addition)
         void evolve_schema(const std::pmr::vector<column_info_t>& new_columns);
 
-        // Конвертация документа в row согласно текущей схеме
+        // Convert document to row
         vector::data_chunk_t document_to_row(const document::document_ptr& doc);
 
-        // Конвертация row обратно в документ
+        // Convert row back to document
         document::document_ptr row_to_document(const vector::data_chunk_t& row, size_t row_idx);
 
-        // Вспомогательные методы для работы с union типами
+        // Helper methods
         types::logical_value_t extract_value_from_document(const document::document_ptr& doc,
                                                            const std::string& json_path,
                                                            types::logical_type expected_type);
@@ -84,27 +105,28 @@ namespace components::document_table {
         types::logical_type detect_value_type_in_document(const document::document_ptr& doc,
                                                           const std::string& json_path);
 
-        // Получение Map: path -> value для документа
         std::pmr::unordered_map<std::string, types::logical_value_t>
         extract_path_values(const document::document_ptr& doc);
 
         std::pmr::memory_resource* resource_;
         table::storage::block_manager_t& block_manager_;
 
-        // Динамическая схема
-        std::unique_ptr<dynamic_schema_t> schema_;
+        // Column storage (inlined from dynamic_schema)
+        std::pmr::vector<column_info_t> columns_;
+        std::pmr::unordered_map<std::string, size_t> path_to_index_;
+        std::unique_ptr<json_path_extractor_t> extractor_;
 
-        // Текущая таблица
+        // Data table
         std::unique_ptr<table::data_table_t> table_;
 
-        // Маппинг document_id -> row_id
+        // Document ID -> row ID mapping
         std::pmr::unordered_map<document::document_id_t,
                                 size_t,
                                 document_id_hash_t,
                                 std::equal_to<document::document_id_t>>
             id_to_row_;
 
-        // Следующий row_id
+        // Next row ID
         size_t next_row_id_;
     };
 

@@ -172,7 +172,7 @@ TEST_CASE("document_table - schema evolution tests") {
         insert1.on_execute(nullptr);
 
         auto& storage = context->document_table_storage().storage();
-        auto schema1 = storage.schema().to_column_definitions();
+        auto schema1 = storage.to_column_definitions();
         REQUIRE(schema1.size() == 2); // _id, name
 
         // Add age field
@@ -187,7 +187,7 @@ TEST_CASE("document_table - schema evolution tests") {
         insert2.set_children({new base::operators::operator_raw_data_t(std::move(batch2))});
         insert2.on_execute(nullptr);
 
-        auto schema2 = storage.schema().to_column_definitions();
+        auto schema2 = storage.to_column_definitions();
         REQUIRE(schema2.size() == 3); // _id, name, age
 
         // Add city field
@@ -203,7 +203,7 @@ TEST_CASE("document_table - schema evolution tests") {
         insert3.set_children({new base::operators::operator_raw_data_t(std::move(batch3))});
         insert3.on_execute(nullptr);
 
-        auto schema3 = storage.schema().to_column_definitions();
+        auto schema3 = storage.to_column_definitions();
         REQUIRE(schema3.size() == 4); // _id, name, age, city
 
         // Verify all 3 documents are still accessible
@@ -242,7 +242,7 @@ TEST_CASE("document_table - schema evolution tests") {
         REQUIRE(insert.modified()->size() == 3);
 
         auto& storage = context->document_table_storage().storage();
-        auto schema = storage.schema().to_column_definitions();
+        auto schema = storage.to_column_definitions();
 
         // Should have: _id, name, age, city, email
         REQUIRE(schema.size() == 5);
