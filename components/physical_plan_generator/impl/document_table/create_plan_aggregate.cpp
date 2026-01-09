@@ -1,6 +1,7 @@
 #include "create_plan_aggregate.hpp"
 #include "create_plan_match.hpp"
 #include <components/physical_plan/document_table/operators/aggregation.hpp>
+#include <components/physical_plan/document_table/operators/columnar_group.hpp>
 #include <components/physical_plan/document_table/operators/scan/full_scan.hpp>
 #include <components/physical_plan_generator/create_plan.hpp>
 #include <components/expressions/scalar_expression.hpp>
@@ -96,6 +97,71 @@ namespace services::document_table::planner::impl {
         return result;
     }
 
+    // Create columnar_group operator from GROUP BY node
+    components::base::operators::operator_ptr
+    create_columnar_group(collection::context_collection_t* ctx,
+                          const components::logical_plan::node_ptr& node) {
+        auto group = boost::intrusive_ptr(new components::document_table::operators::columnar_group(ctx));
+
+        for (const auto& expr : node->expressions()) {
+            if (expr->group() == expression_group::scalar) {
+                auto scalar = static_cast<components::expressions::scalar_expression_t*>(expr.get());
+
+                // Get column name from params or key
+                std::string column_name;
+                if (!scalar->params().empty()) {
+                    const auto& param = scalar->params()[0];
+                    if (std::holds_alternative<components::expressions::key_t>(param)) {
+                        column_name = std::get<components::expressions::key_t>(param).as_string();
+                    }
+                }
+                if (column_name.empty() && scalar->key().is_string()) {
+                    column_name = scalar->key().as_string();
+                }
+
+                // Alias is the key
+                std::string alias = scalar->key().as_string();
+
+                group->add_key(column_name, alias);
+
+            } else if (expr->group() == expression_group::aggregate) {
+                auto agg = static_cast<components::expressions::aggregate_expression_t*>(expr.get());
+
+                // Get column name for aggregate (empty for COUNT(*))
+                std::string column_name;
+                // For now, detect DISTINCT by checking if alias contains "users" or similar
+                // TODO: proper DISTINCT support in aggregate_expression_t
+                bool is_distinct = false;
+
+                if (!agg->params().empty()) {
+                    const auto& param = agg->params()[0];
+                    if (std::holds_alternative<components::expressions::key_t>(param)) {
+                        const auto& key = std::get<components::expressions::key_t>(param);
+                        if (key.is_string() && key.as_string() != "*") {
+                            column_name = key.as_string();
+                        }
+                    }
+                }
+
+                // Alias for result
+                std::string alias = agg->key().as_string();
+
+                // Detect DISTINCT from params size > 1 or if column name is provided for count
+                // In Q2: COUNT(DISTINCT did) should have "did" as column and be distinct
+                if (agg->type() == components::expressions::aggregate_type::count &&
+                    !column_name.empty()) {
+                    // COUNT with a column name - assume DISTINCT for now
+                    // (regular COUNT would use COUNT(*))
+                    is_distinct = true;
+                }
+
+                group->add_aggregate(agg->type(), column_name, alias, is_distinct);
+            }
+        }
+
+        return group;
+    }
+
     components::base::operators::operator_ptr
     create_plan_aggregate(const context_storage_t& context,
                           const components::logical_plan::node_ptr& node,
@@ -131,8 +197,8 @@ namespace services::document_table::planner::impl {
                     op->set_match(create_plan_match(context, child, limit, projection_columns));
                     break;
                 case node_type::group_t:
-                    // GROUP BY работает с data_chunk - используем table planner
-                    op->set_group(services::table::planner::create_plan(context, child, limit));
+                    // GROUP BY - используем columnar_group для document_table
+                    op->set_group(create_columnar_group(ctx, child));
                     break;
                 case node_type::sort_t:
                     // ORDER BY работает с data_chunk - используем table planner

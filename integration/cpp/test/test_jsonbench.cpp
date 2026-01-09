@@ -13,7 +13,7 @@ namespace types = components::types;
 
 namespace {
 
-std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_10000.json";
+std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_20000.json";
 
 std::vector<std::string> read_ndjson_file(const std::string& filepath) {
     std::vector<std::string> lines;
