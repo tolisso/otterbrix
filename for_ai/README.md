@@ -5,48 +5,52 @@
 ## Быстрый старт
 
 **Начните с:**
-1. `FINAL_SUMMARY.md` - текущее состояние проекта, результаты тестов, известные проблемы
+1. **`document_table/CURRENT_STATE.md`** - АКТУАЛЬНОЕ состояние (json-3 branch)
 2. `storage_architecture.md` - общая архитектура storage layer
-3. `document_table_key_points.md` - ключевые моменты document_table
+3. `document_table_integration_plan.md` - план интеграции с catalog
 
 ## Структура документации
 
-### Общие документы
-- `storage_architecture.md` - архитектура storage layer (document vs document_table)
-- `document_table_key_points.md` - ключевые моменты и отличия document_table
+### Актуальные документы
+- **`document_table/CURRENT_STATE.md`** - текущее состояние после рефакторинга
+- `storage_architecture.md` - архитектура storage layer
+- `document_table_integration_plan.md` - интеграция с catalog
 
-### Document Table Implementation
-- `document_table/00_summary.md` - общий обзор document_table
-- `document_table/01_design.md` - дизайн и архитектура
-- `document_table/02_json_path_extractor.md` - работа с JSON путями
-- `document_table/03_dynamic_schema.md` - динамическая схема
-- `document_table/04_operators.md` - операторы (scan, filter, aggregate, etc.)
-- `document_table/README_UNION_TYPES.md` - поддержка union types
-- `document_table/FINAL_SUMMARY.md` - итоговый отчет с результатами тестов
+### Устаревшие документы (для справки)
+> ⚠️ Следующие документы описывают состояние ДО рефакторинга (коммит 0276d40)
 
-## Текущее состояние (из FINAL_SUMMARY.md)
+- `document_table/00_summary.md` - упоминает dynamic_schema (удалён)
+- `document_table/01_design.md` - старая архитектура
+- `document_table/02_json_path_extractor.md` - актуален частично
+- `document_table/03_dynamic_schema.md` - **ПОЛНОСТЬЮ УСТАРЕЛ** (класс удалён)
+- `document_table/04_operators.md` - не отражает текущие операторы
+- `document_table/README_UNION_TYPES.md` - **УСТАРЕЛ** (union types убраны)
+- `document_table/FINAL_SUMMARY.md` - результаты до оптимизаций
+
+## Текущее состояние (json-3 branch)
+
+### Архитектура после рефакторинга
+- ✅ dynamic_schema убран - логика встроена в document_table_storage_t
+- ✅ Union types убраны - упрощена типизация
+- ✅ Синхронизация схемы с catalog
+- ✅ Batch INSERT оптимизирован
 
 ### Реализовано
-- ✅ primary_key_scan - O(1) lookup по _id (33.6x ускорение)
-- ✅ Колоночный формат с Arrow
-- ✅ Динамическая схема (schema evolution)
-- ✅ Union types для гибкой типизации
-- ✅ Базовые операторы (scan, filter, aggregate, group_by, project)
+- ✅ primary_key_scan - O(1) lookup по _id
+- ✅ Колоночный формат
+- ✅ Schema evolution (автоматическое расширение схемы)
+- ✅ Операторы: full_scan, insert, delete, update, columnar_group, aggregation
+- ✅ Projection pushdown
+- ✅ COUNT DISTINCT
 
-### Производительность (1000 records)
-- Projection queries: 1.2x медленнее чем document (почти паритет!)
-- Aggregation: 2.3x медленнее чем document
-- INSERT: 47x медленнее чем document (OLTP слабость)
-
-### Известные проблемы
-- ⚠️ Crash при фильтрации по вложенным полям (commit.operation)
-- ⚠️ Требуется явная генерация _id в document storage
-
-### Следующие шаги
-1. Исправить nullptr crash при вложенных полях
-2. Реализовать projection pushdown
-3. Late materialization для фильтров
-4. Vectorized execution для аналитики
+### Производительность (JSONBench, 10000 records)
+| Запрос | document_table | document (B-tree) | Winner |
+|--------|----------------|-------------------|--------|
+| GROUP BY | 92ms | 175ms | **DT 1.9x** |
+| GROUP BY + COUNT DISTINCT | 102ms | 317ms | **DT 3.1x** |
+| WHERE filter | 3ms | 2ms | Паритет |
+| Projection | 71ms | 251ms | **DT 3.5x** |
+| GROUP BY + MIN | 95ms | 328ms | **DT 3.4x** |
 
 ## Когда использовать document_table
 
