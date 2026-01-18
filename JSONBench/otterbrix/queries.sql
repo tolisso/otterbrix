@@ -1,0 +1,5 @@
+SELECT commit_dot_collection AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;
+SELECT commit_dot_collection AS event, COUNT(*) AS count, COUNT(DISTINCT did) AS users FROM bluesky_bench.bluesky WHERE kind = 'commit' AND commit_dot_operation = 'create' GROUP BY event ORDER BY count DESC;
+SELECT commit_dot_collection AS event, COUNT(*) AS count FROM bluesky_bench.bluesky WHERE kind = 'commit' AND commit_dot_operation = 'create' AND commit_dot_collection IN ('app.bsky.feed.post', 'app.bsky.feed.repost', 'app.bsky.feed.like') GROUP BY event ORDER BY count DESC;
+SELECT did AS user_id, MIN(time_us) AS first_post_time FROM bluesky_bench.bluesky WHERE kind = 'commit' AND commit_dot_operation = 'create' AND commit_dot_collection = 'app.bsky.feed.post' GROUP BY user_id ORDER BY first_post_time ASC LIMIT 3;
+SELECT did AS user_id, MAX(time_us) AS max_time, MIN(time_us) AS min_time FROM bluesky_bench.bluesky WHERE kind = 'commit' AND commit_dot_operation = 'create' AND commit_dot_collection = 'app.bsky.feed.post' GROUP BY user_id LIMIT 3;
