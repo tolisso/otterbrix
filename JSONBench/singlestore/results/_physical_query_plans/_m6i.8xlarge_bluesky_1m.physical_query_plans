@@ -1,0 +1,74 @@
+------------------------------------------------------------------------------------------------------------------------
+Physical query plan for query Q1:
+
+EXPLAIN
+Project [remote_0.event, remote_0.count] est_rows:913,408
+Sort [remote_0.count DESC]
+Gather partitions:all est_rows:913,408 alias:remote_0 parallelism_level:sub_partition
+Project [r0.event, CAST(COALESCE($0,0) AS SIGNED) AS count] est_rows:913,408
+Sort [CAST(COALESCE(SUM(r0.count),0) AS SIGNED) DESC]
+HashGroupBy [SUM(r0.count) AS $0] groups:[r0.event]
+TableScan r0 storage:list stream:yes table_type:sharded est_table_rows:913,408 est_filtered:913,408
+Repartition [JSON_EXTRACT_JSON(bluesky.data,'commit','collection') AS event, count] AS r0 shard_key:[event] parallelism_level:segment est_rows:913,408 est_select_cost:1,000,000
+ShuffleGroupBy [COUNT(*) AS count] groups:[JSON_EXTRACT_JSON(bluesky.data,'commit','collection')]
+ColumnStoreScan bluesky_1m.bluesky, SORT KEY __UNORDERED () table_type:sharded_columnstore est_table_rows:1,000,000 est_filtered:1,000,000
+------------------------------------------------------------------------------------------------------------------------
+Physical query plan for query Q2:
+
+EXPLAIN
+Project [remote_0.event, remote_0.count, remote_0.`count(distinct data::did)`] est_rows:954,611
+Sort [CAST(remote_0.op_1 AS SIGNED) DESC]
+Gather partitions:all est_rows:954,611 alias:remote_0 parallelism_level:sub_partition
+Project [r1.event, CAST($0 AS SIGNED) AS count, CAST(COALESCE($1,0) AS SIGNED) AS `count(distinct data::did)`, op_1] est_rows:954,611
+Sort [CAST(SUM(r1.op_1) AS SIGNED) DESC]
+HashGroupBy [SUM(r1.op_0) AS $0, SUM(r1.`count(distinct data::did)`) AS $1, SUM(r1.op_1) AS op_1] groups:[r1.event]
+TableScan r1 storage:list stream:yes table_type:sharded est_table_rows:954,611 est_filtered:954,611
+Repartition [s_0.`expr(JSON_EXTRACT_JSON(bluesky.data,'commit','c..)_0` AS event, `count(distinct data::did)`, op_0, op_1] AS r1 shard_key:[event] parallelism_level:sub_partition est_rows:954,611 est_select_cost:954,611
+ShuffleGroupBy [COUNT(s_0.`expr(JSON_EXTRACT_JSON(bluesky.data,'did'))_0`) AS `count(distinct data::did)`, SUM(s_0.count) AS op_0, SUM(s_0.tmp) AS op_1] groups:[s_0.`expr(JSON_EXTRACT_JSON(bluesky.data,'commit','c..)_0`]
+TableScan 0tmp AS s_0 storage:list stream:yes est_table_rows:954,611 est_filtered:954,611
+Project [CAST(COALESCE($0,0) AS SIGNED) AS count, CAST(COALESCE($1,0) AS SIGNED) AS tmp, r0.`expr(JSON_EXTRACT_JSON(bluesky.data,'commit','c..)_0`, r0.`expr(JSON_EXTRACT_JSON(bluesky.data,'did'))_0`] est_rows:954,611
+HashGroupBy [SUM(r0.count) AS $0] groups:[r0.`expr(JSON_EXTRACT_JSON(bluesky.data,'commit','c..)_0`, r0.`expr(JSON_EXTRACT_JSON(bluesky.data,'did'))_0`]
+TableScan r0 storage:list stream:yes table_type:sharded est_table_rows:954,611 est_filtered:954,611
+Repartition [count, JSON_EXTRACT_JSON(bluesky.data,'commit','collection') AS `expr(JSON_EXTRACT_JSON(bluesky.data,'commit','c..)_0`, JSON_EXTRACT_JSON(bluesky.data,'did') AS `expr(JSON_EXTRACT_JSON(bluesky.data,'did'))_0`] AS r0 shard_key:[`expr(JSON_EXTRACT_JSON(bluesky.data,'commit','c..)_0`, `expr(JSON_EXTRACT_JSON(bluesky.data,'did'))_0`] parallelism_level:segment est_rows:954,611 est_select_cost:954,611
+ShuffleGroupBy [COUNT(*) AS count] groups:[JSON_EXTRACT_JSON(bluesky.data,'commit','collection'), JSON_EXTRACT_JSON(bluesky.data,'did')]
+ColumnStoreFilter [JSON_EXTRACT_STRING(bluesky.data,'kind') = 'commit' AND JSON_EXTRACT_STRING(bluesky.data,'commit','operation') = 'create']
+ColumnStoreScan bluesky_1m.bluesky, SORT KEY __UNORDERED () table_type:sharded_columnstore est_table_rows:1,000,000 est_filtered:954,611
+------------------------------------------------------------------------------------------------------------------------
+Physical query plan for query Q3:
+
+EXPLAIN
+Project [remote_0.event, remote_0.hour_of_day, remote_0.count] est_rows:588,328
+Sort [remote_0.hour_of_day, remote_0.event]
+Gather partitions:all est_rows:588,328 alias:remote_0 parallelism_level:sub_partition
+Project [r0.event, r0.hour_of_day, CAST(COALESCE($0,0) AS SIGNED) AS count] est_rows:588,328
+Sort [r0.hour_of_day, r0.event]
+HashGroupBy [SUM(r0.count) AS $0] groups:[r0.event, r0.hour_of_day]
+TableScan r0 storage:list stream:yes table_type:sharded est_table_rows:588,328 est_filtered:588,328
+Repartition [JSON_EXTRACT_JSON(bluesky.data,'commit','collection') AS event, HOUR(FROM_UNIXTIME(JSON_EXTRACT_JSON(bluesky.data,'time_us') / 1000000)) AS hour_of_day, count] AS r0 shard_key:[event, hour_of_day] parallelism_level:segment est_rows:588,328 est_select_cost:588,328
+ShuffleGroupBy [COUNT(*) AS count] groups:[JSON_EXTRACT_JSON(bluesky.data,'commit','collection'), HOUR(FROM_UNIXTIME(JSON_EXTRACT_JSON(bluesky.data,'time_us') / 1000000))]
+ColumnStoreFilter [JSON_EXTRACT_STRING(bluesky.data,'kind') = 'commit' AND JSON_EXTRACT_STRING(bluesky.data,'commit','operation') = 'create' AND JSON_EXTRACT_STRING(bluesky.data,'commit','collection') IN (...)] inlist_hashtable_optimized:all
+ColumnStoreScan bluesky_1m.bluesky, SORT KEY __UNORDERED () table_type:sharded_columnstore est_table_rows:1,000,000 est_filtered:588,328
+------------------------------------------------------------------------------------------------------------------------
+Physical query plan for query Q4:
+
+EXPLAIN
+Project [remote_0.user_id, first_post_ts] est_rows:3
+TopSort limit:3 [MIN(remote_0.first_post_ts)]
+HashGroupBy [MIN(remote_0.first_post_ts) AS first_post_ts] groups:[remote_0.user_id]
+Gather partitions:all est_rows:79,295 alias:remote_0 parallelism_level:segment
+Project [JSON_EXTRACT_STRING(bluesky.data,'did') AS user_id, first_post_ts] est_rows:79,295
+HashGroupBy [MIN(FROM_UNIXTIME(JSON_EXTRACT_JSON(bluesky.data,'time_us') / 1000000)) AS first_post_ts] groups:[JSON_EXTRACT_STRING(bluesky.data,'did')]
+ColumnStoreFilter [JSON_EXTRACT_STRING(bluesky.data,'kind') = 'commit' AND JSON_EXTRACT_STRING(bluesky.data,'commit','operation') = 'create' AND JSON_EXTRACT_STRING(bluesky.data,'commit','collection') = 'app.bsky.feed.post']
+ColumnStoreScan bluesky_1m.bluesky, SORT KEY __UNORDERED () table_type:sharded_columnstore est_table_rows:1,000,000 est_filtered:86,812
+------------------------------------------------------------------------------------------------------------------------
+Physical query plan for query Q5:
+
+EXPLAIN
+Project [remote_0.user_id, TIMESTAMPDIFF(MICROSECOND, $0, $1) AS activity_span] est_rows:3
+TopSort limit:3 [TIMESTAMPDIFF(MICROSECOND, MIN(remote_0.op_1), MAX(remote_0.op_2)) DESC]
+HashGroupBy [MIN(remote_0.op_1) AS $0, MAX(remote_0.op_2) AS $1] groups:[remote_0.user_id]
+Gather partitions:all est_rows:79,295 alias:remote_0 parallelism_level:segment
+Project [JSON_EXTRACT_STRING(bluesky.data,'did') AS user_id, op_1, op_2] est_rows:79,295
+HashGroupBy [MIN(FROM_UNIXTIME(JSON_EXTRACT_JSON(bluesky.data,'time_us') / 1000000)) AS op_1, MAX(FROM_UNIXTIME(JSON_EXTRACT_JSON(bluesky.data,'time_us') / 1000000)) AS op_2] groups:[JSON_EXTRACT_STRING(bluesky.data,'did')]
+ColumnStoreFilter [JSON_EXTRACT_STRING(bluesky.data,'kind') = 'commit' AND JSON_EXTRACT_STRING(bluesky.data,'commit','operation') = 'create' AND JSON_EXTRACT_STRING(bluesky.data,'commit','collection') = 'app.bsky.feed.post']
+ColumnStoreScan bluesky_1m.bluesky, SORT KEY __UNORDERED () table_type:sharded_columnstore est_table_rows:1,000,000 est_filtered:86,812
