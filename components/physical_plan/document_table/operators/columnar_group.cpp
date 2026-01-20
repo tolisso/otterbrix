@@ -9,7 +9,7 @@
 namespace components::document_table::operators {
 
     namespace {
-        // Helper: convert logical_value_t to string for hashing
+        // Helper: convert logical_value_t to string for hashing (fallback for unsupported types)
         std::string value_to_string(const types::logical_value_t& val) {
             if (val.is_null()) return "\x00NULL\x00";
 
@@ -33,6 +33,51 @@ namespace components::document_table::operators {
                     return ss.str();
                 }
             }
+        }
+
+        // Converter from key type to logical_value_t
+        template<typename KeyType>
+        types::logical_value_t key_to_logical_value(KeyType key) {
+            return types::logical_value_t(key);
+        }
+
+        template<>
+        types::logical_value_t key_to_logical_value<std::string_view>(std::string_view key) {
+            return types::logical_value_t(std::string(key));
+        }
+
+        // Type-specific key extractor for GROUP BY optimization
+        // Tested only for STRING_LITERAL; other types follow the same pattern
+        template<typename KeyType>
+        size_t build_single_key_groups_typed(
+            const vector::vector_t& vec,
+            size_t row_count,
+            std::vector<uint32_t>& group_ids,
+            std::vector<std::vector<types::logical_value_t>>& unique_keys) {
+
+            std::unordered_map<KeyType, uint32_t> key_to_group;
+            uint32_t next_group_id = 0;
+            auto* key_data = vec.data<KeyType>();
+            const auto& validity = vec.validity();
+
+            for (size_t row = 0; row < row_count; row++) {
+                if (!validity.row_is_valid(row)) {
+                    group_ids[row] = UINT32_MAX;
+                    continue;
+                }
+
+                KeyType key = key_data[row];
+                auto it = key_to_group.find(key);
+                if (it != key_to_group.end()) {
+                    group_ids[row] = it->second;
+                } else {
+                    uint32_t gid = next_group_id++;
+                    key_to_group[key] = gid;
+                    group_ids[row] = gid;
+                    unique_keys.push_back({key_to_logical_value(key)});
+                }
+            }
+            return next_group_id;
         }
 
         // Helper: convert logical_value_t to double for aggregations
@@ -203,10 +248,41 @@ namespace components::document_table::operators {
         }
 
         if (keys_.size() == 1) {
-            // Single key - use value directly without concatenation
+            // Single key - use type-specific optimized path
+            size_t key_col = keys_[0].column_index;
+            const auto& vec = input.data[key_col];
+            auto key_type = vec.type().type();
+
+            switch (key_type) {
+                case types::logical_type::STRING_LITERAL:
+                    return build_single_key_groups_typed<std::string_view>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::BIGINT:
+                    return build_single_key_groups_typed<int64_t>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::INTEGER:
+                    return build_single_key_groups_typed<int32_t>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::SMALLINT:
+                    return build_single_key_groups_typed<int16_t>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::TINYINT:
+                    return build_single_key_groups_typed<int8_t>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::UBIGINT:
+                    return build_single_key_groups_typed<uint64_t>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::UINTEGER:
+                    return build_single_key_groups_typed<uint32_t>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::USMALLINT:
+                    return build_single_key_groups_typed<uint16_t>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::UTINYINT:
+                    return build_single_key_groups_typed<uint8_t>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::DOUBLE:
+                    return build_single_key_groups_typed<double>(vec, row_count, group_ids, unique_keys);
+                case types::logical_type::FLOAT:
+                    return build_single_key_groups_typed<float>(vec, row_count, group_ids, unique_keys);
+                default:
+                    break; // Fall through to generic path
+            }
+
+            // Generic fallback for unsupported types
             std::unordered_map<std::string, uint32_t> key_to_group;
             uint32_t next_group_id = 0;
-            size_t key_col = keys_[0].column_index;
 
             for (size_t row = 0; row < row_count; row++) {
                 auto value = input.value(key_col, row);
