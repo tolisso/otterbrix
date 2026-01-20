@@ -202,47 +202,71 @@ namespace components::document_table::operators {
             return 1;
         }
 
-        // Hash map: key values -> group_id
-        // For simplicity, use string representation of key as hash key
-        std::unordered_map<std::string, uint32_t> key_to_group;
-        uint32_t next_group_id = 0;
+        if (keys_.size() == 1) {
+            // Single key - use value directly without concatenation
+            std::unordered_map<std::string, uint32_t> key_to_group;
+            uint32_t next_group_id = 0;
+            size_t key_col = keys_[0].column_index;
 
-        for (size_t row = 0; row < row_count; row++) {
-            // Build key string for this row
-            std::string key_str;
-            std::vector<types::logical_value_t> key_values;
-            key_values.reserve(keys_.size());
-
-            bool has_null = false;
-            for (const auto& key : keys_) {
-                auto value = input.value(key.column_index, row);
+            for (size_t row = 0; row < row_count; row++) {
+                auto value = input.value(key_col, row);
                 if (value.is_null()) {
-                    has_null = true;
-                    break;
+                    group_ids[row] = UINT32_MAX;
+                    continue;
                 }
-                key_values.push_back(value);
-                // Append to key string for hashing
-                key_str += value_to_string(value) + "\x00";
+
+                std::string key_str = value_to_string(value);
+                auto it = key_to_group.find(key_str);
+                if (it != key_to_group.end()) {
+                    group_ids[row] = it->second;
+                } else {
+                    uint32_t gid = next_group_id++;
+                    key_to_group[key_str] = gid;
+                    group_ids[row] = gid;
+                    unique_keys.push_back({std::move(value)});
+                }
             }
 
-            if (has_null) {
-                // Skip rows with NULL keys (standard SQL behavior)
-                group_ids[row] = UINT32_MAX; // Mark as invalid
-                continue;
+            return next_group_id;
+        } else {
+            // Multiple keys - concatenate values
+            std::unordered_map<std::string, uint32_t> key_to_group;
+            uint32_t next_group_id = 0;
+
+            for (size_t row = 0; row < row_count; row++) {
+                std::string key_str;
+                std::vector<types::logical_value_t> key_values;
+                key_values.reserve(keys_.size());
+
+                bool has_null = false;
+                for (const auto& key : keys_) {
+                    auto value = input.value(key.column_index, row);
+                    if (value.is_null()) {
+                        has_null = true;
+                        break;
+                    }
+                    key_values.push_back(value);
+                    key_str += value_to_string(value) + "\x00";
+                }
+
+                if (has_null) {
+                    group_ids[row] = UINT32_MAX;
+                    continue;
+                }
+
+                auto it = key_to_group.find(key_str);
+                if (it != key_to_group.end()) {
+                    group_ids[row] = it->second;
+                } else {
+                    uint32_t gid = next_group_id++;
+                    key_to_group[key_str] = gid;
+                    group_ids[row] = gid;
+                    unique_keys.push_back(std::move(key_values));
+                }
             }
 
-            auto it = key_to_group.find(key_str);
-            if (it != key_to_group.end()) {
-                group_ids[row] = it->second;
-            } else {
-                uint32_t gid = next_group_id++;
-                key_to_group[key_str] = gid;
-                group_ids[row] = gid;
-                unique_keys.push_back(std::move(key_values));
-            }
+            return next_group_id;
         }
-
-        return next_group_id;
     }
 
     void columnar_group::calculate_aggregates(const vector::data_chunk_t& input,
