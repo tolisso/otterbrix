@@ -4,6 +4,9 @@
 #include <sstream>
 #include <chrono>
 #include <iomanip>
+#include <components/sql/parser/parser.h>
+#include <components/sql/transformer/transformer.hpp>
+#include <components/sql/transformer/utils.hpp>
 
 static const database_name_t database_name = "bluesky_bench";
 static const collection_name_t collection_name = "bluesky";
@@ -13,7 +16,7 @@ namespace types = components::types;
 
 namespace {
 
-std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_100_000.json";
+std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_20000.json";
 
 std::vector<std::string> read_ndjson_file(const std::string& filepath) {
     std::vector<std::string> lines;
@@ -103,6 +106,69 @@ BenchmarkResult run_query(const std::unique_ptr<test_spaces>& space,
         cur->size(),
         storage_type
     };
+}
+
+// Detailed timing version
+struct DetailedBenchmarkResult {
+    long long parse_us;
+    long long plan_us;
+    long long execute_us;
+    long long total_us;
+    size_t count;
+    std::string storage_type;
+};
+
+DetailedBenchmarkResult run_query_detailed(const std::unique_ptr<test_spaces>& space,
+                                            const std::string& query,
+                                            const std::string& storage_type) {
+    using namespace components::sql::transform;
+    auto* dispatcher = space->dispatcher();
+    auto session = otterbrix::session_id_t();
+
+    DetailedBenchmarkResult result{};
+    result.storage_type = storage_type;
+
+    auto total_start = std::chrono::high_resolution_clock::now();
+
+    // Step 1: SQL Parsing
+    auto parse_start = std::chrono::high_resolution_clock::now();
+    std::pmr::monotonic_buffer_resource parser_arena(dispatcher->resource());
+    auto parse_result = linitial(raw_parser(&parser_arena, query.c_str()));
+    auto parse_end = std::chrono::high_resolution_clock::now();
+    result.parse_us = std::chrono::duration_cast<std::chrono::microseconds>(parse_end - parse_start).count();
+
+    // Step 2: Transform to logical plan
+    auto transform_start = std::chrono::high_resolution_clock::now();
+    components::sql::transform::transformer sql_transformer(dispatcher->resource());
+    auto transform_result = sql_transformer.transform(pg_cell_to_node_cast(parse_result)).finalize();
+    auto transform_end = std::chrono::high_resolution_clock::now();
+    result.plan_us = std::chrono::duration_cast<std::chrono::microseconds>(transform_end - transform_start).count();
+
+    REQUIRE(std::holds_alternative<result_view>(transform_result));
+    auto view = std::get<result_view>(std::move(transform_result));
+
+    // Step 3: Execute plan
+    auto execute_start = std::chrono::high_resolution_clock::now();
+    auto cur = dispatcher->execute_plan(session, std::move(view.node), std::move(view.params));
+    auto execute_end = std::chrono::high_resolution_clock::now();
+    result.execute_us = std::chrono::duration_cast<std::chrono::microseconds>(execute_end - execute_start).count();
+
+    auto total_end = std::chrono::high_resolution_clock::now();
+    result.total_us = std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count();
+
+    REQUIRE(cur->is_success());
+    result.count = cur->size();
+
+    return result;
+}
+
+void print_detailed_result(const std::string& name, const DetailedBenchmarkResult& r) {
+    std::cout << "\n--- " << name << " (" << r.storage_type << ") ---" << std::endl;
+    std::cout << "  SQL Parse:    " << std::setw(8) << r.parse_us << " us" << std::endl;
+    std::cout << "  Transform:    " << std::setw(8) << r.plan_us << " us" << std::endl;
+    std::cout << "  Execute:      " << std::setw(8) << r.execute_us << " us" << std::endl;
+    std::cout << "  TOTAL:        " << std::setw(8) << r.total_us << " us (" << r.total_us / 1000 << " ms)" << std::endl;
+    std::cout << "  Result rows:  " << r.count << std::endl;
 }
 
 void print_header(const std::string& title, size_t record_count) {
@@ -272,4 +338,26 @@ TEST_CASE("JSONBench Q5: Top 3 users by activity span", "[jsonbench][q5]") {
     std::cout << "  document: " << doc_result.time_ms << "ms (" << doc_result.count << " users)" << std::endl;
 
     print_comparison("QUERY 5", dt_result, doc_result, "users");
+}
+
+TEST_CASE("JSONBench Q1 Detailed Timing", "[jsonbench][q1][detailed]") {
+    auto json_lines = read_ndjson_file(data_path);
+    REQUIRE(!json_lines.empty());
+
+    print_header("JSONBench Q1: DETAILED TIMING", json_lines.size());
+
+    std::string query = "SELECT commit_dot_collection AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;";
+
+    std::cout << "Query: " << query << std::endl;
+
+    std::cout << "\n[1/2] Setting up document_table storage..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q1_detailed_dt", json_lines, "document_table");
+
+    // Run 3 times to get warm cache results
+    std::cout << "\nRunning 3 iterations:" << std::endl;
+    for (int i = 1; i <= 3; i++) {
+        std::cout << "\n=== Iteration " << i << " ===" << std::endl;
+        auto result = run_query_detailed(dt_space, query, "document_table");
+        print_detailed_result("Q1", result);
+    }
 }
