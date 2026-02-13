@@ -1,0 +1,82 @@
+./JSONBench/postgresql/test_local.sh noindex 100_000_filtered
+
+###
+Test file: /home/tolisso/otterbrix/integration/cpp/test/test_sample_100_000_filtered.json
+Database: bluesky_test
+Records: 100_000_filtered
+Index: noindex
+
+=== Dropping existing database ===
+[sudo] password for tolisso:
+DROP DATABASE
+=== Creating database ===
+could not change directory to "/home/tolisso/otterbrix": Permission denied
+CREATE DATABASE
+=== Creating table ===
+could not change directory to "/home/tolisso/otterbrix": Permission denied
+CREATE TABLE
+=== Skipping index creation ===
+=== Loading data ===
+could not change directory to "/home/tolisso/otterbrix": Permission denied
+COPY 100000
+
+=== Record count ===
+could not change directory to "/home/tolisso/otterbrix": Permission denied
+ count
+--------
+ 100000
+(1 row)
+
+
+=== Running Benchmark Queries (Index: noindex) ===
+
+document_table: 60ms
+--- Query 1 ---
+SELECT data -> 'commit' ->> 'collection' AS event, COUNT(*) as count FROM bluesky GROUP BY event ORD...
+(14 rows)
+Time: 14,513 ms
+(14 rows)
+Time: 13,009 ms
+(14 rows)
+Time: 16,711 ms
+
+document_table: 485ms
+--- Query 2 ---
+SELECT data -> 'commit' ->> 'collection' AS event, COUNT(*) as count, COUNT(DISTINCT data ->> 'did')...
+(13 rows)
+Time: 174,026 ms
+(13 rows)
+Time: 172,975 ms
+(13 rows)
+Time: 172,966 ms
+
+document_table: 389ms
+--- Query 3 ---
+SELECT data->'commit'->>'collection' AS event, EXTRACT(HOUR FROM TO_TIMESTAMP((data->>'time_us')::BI...
+(3 rows)
+Time: 44,333 ms
+(3 rows)
+Time: 40,063 ms
+(3 rows)
+Time: 40,550 ms
+
+document_table: 556ms
+--- Query 4 ---
+SELECT data->>'did' AS user_id, MIN( TIMESTAMP WITH TIME ZONE 'epoch' + INTERVAL '1 microsecond' * (...
+(3 rows)
+Time: 30,189 ms
+(3 rows)
+Time: 27,788 ms
+(3 rows)
+Time: 26,715 ms
+
+document_table: 555ms
+--- Query 5 ---
+SELECT data->>'did' AS user_id, EXTRACT(EPOCH FROM ( MAX( TIMESTAMP WITH TIME ZONE 'epoch' + INTERVA...
+(3 rows)
+Time: 29,737 ms
+(3 rows)
+Time: 33,157 ms
+(3 rows)
+Time: 30,354 ms
+
