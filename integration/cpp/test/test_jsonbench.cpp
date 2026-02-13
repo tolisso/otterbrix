@@ -11,14 +11,33 @@
 static const database_name_t database_name = "bluesky_bench";
 static const collection_name_t collection_name = "bluesky";
 
+// Number of documents to use from the dataset (max 100000)
+static constexpr size_t DOC_LIMIT = 100000;
+
 using components::cursor::cursor_t_ptr;
 namespace types = components::types;
 
 namespace {
 
-std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_20000.json";
+std::string data_path = "/home/tolisso/otterbrix/integration/cpp/test/test_sample_100_000_filtered.json";
 
-std::vector<std::string> read_ndjson_file(const std::string& filepath) {
+// Get current process memory usage in MB (Linux only)
+size_t get_memory_usage_mb() {
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line)) {
+        if (line.substr(0, 6) == "VmRSS:") {
+            // Parse "VmRSS:    12345 kB"
+            size_t kb = 0;
+            std::istringstream iss(line.substr(6));
+            iss >> kb;
+            return kb / 1024;
+        }
+    }
+    return 0;
+}
+
+std::vector<std::string> read_ndjson_file(const std::string& filepath, size_t limit = DOC_LIMIT) {
     std::vector<std::string> lines;
     std::ifstream file(filepath);
     if (!file.is_open()) {
@@ -27,7 +46,7 @@ std::vector<std::string> read_ndjson_file(const std::string& filepath) {
     }
 
     std::string line;
-    while (std::getline(file, line)) {
+    while (std::getline(file, line) && lines.size() < limit) {
         if (!line.empty()) {
             lines.push_back(line);
         }
@@ -156,6 +175,9 @@ DetailedBenchmarkResult run_query_detailed(const std::unique_ptr<test_spaces>& s
     auto total_end = std::chrono::high_resolution_clock::now();
     result.total_us = std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count();
 
+    if (cur->is_error()) {
+        std::cout << "query execution error: " << cur->get_error().what;
+    }
     REQUIRE(cur->is_success());
     result.count = cur->size();
 
@@ -360,4 +382,71 @@ TEST_CASE("JSONBench Q1 Detailed Timing", "[jsonbench][q1][detailed]") {
         auto result = run_query_detailed(dt_space, query, "document_table");
         print_detailed_result("Q1", result);
     }
+}
+
+TEST_CASE("JSONBench Memory: Insert only", "[jsonbench][memory]") {
+    std::cout << "\n======================================================" << std::endl;
+    std::cout << "JSONBench MEMORY TEST: Insert " << DOC_LIMIT << " documents" << std::endl;
+    std::cout << "======================================================\n" << std::endl;
+
+    auto json_lines = read_ndjson_file(data_path);
+    REQUIRE(!json_lines.empty());
+    std::cout << "Loaded " << json_lines.size() << " JSON lines from file" << std::endl;
+
+    size_t mem_before = get_memory_usage_mb();
+    std::cout << "\nMemory before setup: " << mem_before << " MB" << std::endl;
+
+    auto config = test_create_config("/tmp/bench_memory");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+
+    size_t mem_after_init = get_memory_usage_mb();
+    std::cout << "Memory after spaces init: " << mem_after_init << " MB (+" << (mem_after_init - mem_before) << " MB)" << std::endl;
+
+    dispatcher->create_database(otterbrix::session_id_t(), database_name);
+    auto cur = dispatcher->execute_sql(
+        otterbrix::session_id_t(),
+        "CREATE TABLE bluesky_bench.bluesky() WITH (storage='document_table');");
+    REQUIRE(cur->is_success());
+
+    size_t mem_after_create = get_memory_usage_mb();
+    std::cout << "Memory after create table: " << mem_after_create << " MB (+" << (mem_after_create - mem_after_init) << " MB)" << std::endl;
+
+    // Prepare documents
+    auto session = otterbrix::session_id_t();
+    std::pmr::vector<components::document::document_ptr> docs(dispatcher->resource());
+    size_t doc_idx = 0;
+    for (const auto& line : json_lines) {
+        auto doc = components::document::document_t::document_from_json(line, dispatcher->resource());
+        if (!doc->is_exists("/_id")) {
+            std::ostringstream id_stream;
+            id_stream << std::setfill('0') << std::setw(24) << doc_idx;
+            doc->set("/_id", id_stream.str());
+        }
+        docs.push_back(doc);
+        doc_idx++;
+    }
+
+    size_t mem_after_parse = get_memory_usage_mb();
+    std::cout << "Memory after parsing docs: " << mem_after_parse << " MB (+" << (mem_after_parse - mem_after_create) << " MB)" << std::endl;
+
+    // Insert
+    auto start = std::chrono::high_resolution_clock::now();
+    dispatcher->insert_many(session, database_name, collection_name, docs);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto insert_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    size_t mem_after_insert = get_memory_usage_mb();
+    std::cout << "Memory after insert: " << mem_after_insert << " MB (+" << (mem_after_insert - mem_after_parse) << " MB)" << std::endl;
+
+    std::cout << "\n--- SUMMARY ---" << std::endl;
+    std::cout << "Documents:     " << json_lines.size() << std::endl;
+    std::cout << "Insert time:   " << insert_ms << " ms" << std::endl;
+    std::cout << "Total memory:  " << mem_after_insert << " MB" << std::endl;
+    std::cout << "Memory delta:  " << (mem_after_insert - mem_before) << " MB" << std::endl;
+    std::cout << "MB per 1000 docs: " << std::fixed << std::setprecision(1)
+              << ((mem_after_insert - mem_before) * 1000.0 / json_lines.size()) << " MB" << std::endl;
 }
