@@ -134,6 +134,11 @@ namespace services::collection::executor {
             }
         }
 
+        // TODO: Route SELECT/DELETE/UPDATE through table planner too.
+        // Currently blocked by: table::operator_group is ~150x slower than columnar_group,
+        // and table::full_scan lacks projection support. Need to port columnar_group
+        // and projection to table operators first.
+
         // TODO: this does not handle cross documents/columns operations
         components::base::operators::operator_ptr plan;
         if (data_format == components::catalog::used_format_t::documents) {
@@ -330,7 +335,7 @@ namespace services::collection::executor {
                     execute_sub_plan_finish_(session, make_cursor(resource(), std::move(plan->output()->documents())));
                 }
             } else if (collection->uses_datatable()) {
-                components::vector::data_chunk_t chunk(resource(), collection->table_storage().table().copy_types());
+                components::vector::data_chunk_t chunk(resource(), collection->data_table().copy_types());
                 if (plan->output()) {
                     chunk = std::move(plan->output()->data_chunk());
                 }
@@ -372,7 +377,7 @@ namespace services::collection::executor {
                                      collection->name().collection,
                                      plan->modified()->ids());
                     components::vector::data_chunk_t chunk(resource(),
-                                                           collection->table_storage().table().copy_types());
+                                                           collection->data_table().copy_types());
                     chunk.set_cardinality(std::get<std::pmr::vector<size_t>>(plan->modified()->ids()).size());
                     // TODO: fill chunk with modified rows
                     execute_sub_plan_finish_(session, make_cursor(resource(), std::move(chunk)));
@@ -516,7 +521,7 @@ namespace services::collection::executor {
             if (plan->modified()) {
                 size = std::get<std::pmr::vector<size_t>>(plan->modified()->ids()).size();
             } else {
-                size = collection->table_storage().table().calculate_size();
+                size = collection->data_table().calculate_size();
             }
             components::vector::data_chunk_t chunk(resource(), {}, size);
             chunk.set_cardinality(size);
@@ -539,7 +544,7 @@ namespace services::collection::executor {
                              collection->name().collection,
                              modified);
             size_t size = plan->modified()->size();
-            components::vector::data_chunk_t chunk(resource(), collection->table_storage().table().copy_types(), size);
+            components::vector::data_chunk_t chunk(resource(), collection->data_table().copy_types(), size);
             chunk.set_cardinality(size);
             execute_sub_plan_finish_(session,
                                      make_cursor(resource(), std::move(chunk)),

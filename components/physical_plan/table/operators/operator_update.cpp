@@ -38,18 +38,18 @@ namespace components::table::operators {
                     }
                     modified_ = base::operators::make_operator_write_data<size_t>(context_->resource());
                     table::table_append_state state(context_->resource());
-                    context_->table_storage().table().initialize_append(state);
+                    context_->data_table().initialize_append(state);
                     for (size_t id = 0; id < output_->data_chunk().size(); id++) {
                         modified_->append(id + state.row_start);
                         context_->index_engine()->insert_row(output_->data_chunk(), id, pipeline_context);
                     }
-                    context_->table_storage().table().append(output_->data_chunk(), state);
+                    context_->data_table().append(output_->data_chunk(), state);
                 }
             } else {
                 modified_ = base::operators::make_operator_write_data<size_t>(context_->resource());
                 no_modified_ = base::operators::make_operator_write_data<size_t>(context_->resource());
                 output_ = base::operators::make_operator_data(left_->output()->resource(), types_left);
-                auto state = context_->table_storage().table().initialize_update({});
+                auto state = context_->data_table().initialize_update({});
                 auto& out_chunk = output_->data_chunk();
                 auto predicate = comp_expr_ ? predicates::create_predicate(comp_expr_,
                                                                            types_left,
@@ -80,7 +80,7 @@ namespace components::table::operators {
                     }
                 }
                 out_chunk.set_cardinality(index);
-                context_->table_storage().table().update(*state, out_chunk.row_ids, chunk_left);
+                context_->data_table().update(*state, out_chunk.row_ids, chunk_left);
             }
         } else if (left_ && left_->output()) {
             if (left_->output()->size() == 0) {
@@ -89,8 +89,8 @@ namespace components::table::operators {
                                                                   left_->output()->data_chunk().types());
 
                     table::table_append_state state(context_->resource());
-                    context_->table_storage().table().initialize_append(state);
-                    context_->table_storage().table().append(output_->data_chunk(), state);
+                    context_->data_table().initialize_append(state);
+                    context_->data_table().append(output_->data_chunk(), state);
                 }
             } else {
                 auto& chunk = left_->output()->data_chunk();
@@ -103,7 +103,7 @@ namespace components::table::operators {
                 auto& out_chunk = output_->data_chunk();
                 modified_ = base::operators::make_operator_write_data<size_t>(context_->resource());
                 no_modified_ = base::operators::make_operator_write_data<size_t>(context_->resource());
-                auto state = context_->table_storage().table().initialize_update({});
+                auto state = context_->data_table().initialize_update({});
                 auto predicate =
                     comp_expr_ ? predicates::create_predicate(comp_expr_, types, types, &pipeline_context->parameters)
                                : predicates::create_all_true_predicate(left_->output()->resource());
@@ -134,7 +134,7 @@ namespace components::table::operators {
                     }
                 }
                 out_chunk.set_cardinality(index);
-                context_->table_storage().table().update(*state, out_chunk.row_ids, left_->output()->data_chunk());
+                context_->data_table().update(*state, out_chunk.row_ids, left_->output()->data_chunk());
             }
         }
     }

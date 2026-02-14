@@ -77,7 +77,7 @@ namespace components::table::operators {
     void index_scan::on_execute_impl(pipeline::context_t* pipeline_context) {
         trace(context_->log(), "index_scan by field \"{}\"", expr_->primary_key().as_string());
         auto* index = index::search_index(context_->index_engine(), {expr_->primary_key()});
-        context_->table_storage().table();
+        context_->data_table();
         if (index && index->is_disk()) {
             trace(context_->log(), "index_scan: send query into disk");
             auto value = logical_plan::get_parameter(&pipeline_context->parameters, expr_->value());
@@ -96,10 +96,10 @@ namespace components::table::operators {
                                           expr_,
                                           limit_,
                                           &pipeline_context->parameters,
-                                          context_->table_storage().table());
+                                          context_->data_table());
             } else {
                 output_ = base::operators::make_operator_data(context_->resource(),
-                                                              context_->table_storage().table().copy_types());
+                                                              context_->data_table().copy_types());
             }
         }
     }
@@ -113,10 +113,10 @@ namespace components::table::operators {
         }
         if (index) {
             output_ =
-                search_by_index(index, expr_, limit_, &pipeline_context->parameters, context_->table_storage().table());
+                search_by_index(index, expr_, limit_, &pipeline_context->parameters, context_->data_table());
         } else {
             output_ = base::operators::make_operator_data(context_->resource(),
-                                                          context_->table_storage().table().copy_types());
+                                                          context_->data_table().copy_types());
         }
     }
 

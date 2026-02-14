@@ -46,8 +46,8 @@ namespace components::table::operators {
                     }
                 }
             }
-            auto state = context_->table_storage().table().initialize_delete({});
-            context_->table_storage().table().delete_rows(*state, ids, index);
+            auto state = context_->data_table().initialize_delete({});
+            context_->data_table().delete_rows(*state, ids, index);
             for (size_t i = 0; i < index; i++) {
                 size_t id = ids.data<int64_t>()[i];
                 modified_->append(id);
@@ -79,8 +79,8 @@ namespace components::table::operators {
                 }
             }
             ids.resize(chunk.size(), index);
-            auto state = context_->table_storage().table().initialize_delete({});
-            context_->table_storage().table().delete_rows(*state, ids, index);
+            auto state = context_->data_table().initialize_delete({});
+            context_->data_table().delete_rows(*state, ids, index);
             for (size_t i = 0; i < index; i++) {
                 size_t id = ids.data<int64_t>()[i];
                 modified_->append(id);

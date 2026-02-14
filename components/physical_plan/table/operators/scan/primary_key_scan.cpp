@@ -13,15 +13,15 @@ namespace components::table::operators {
     }
 
     void primary_key_scan::on_execute_impl(pipeline::context_t*) {
-        auto types = context_->table_storage().table().copy_types();
+        auto types = context_->data_table().copy_types();
         output_ = base::operators::make_operator_data(context_->resource(), types);
         table::column_fetch_state state;
         std::vector<table::storage_index_t> column_indices;
-        column_indices.reserve(context_->table_storage().table().column_count());
-        for (int64_t i = 0; i < context_->table_storage().table().column_count(); i++) {
+        column_indices.reserve(context_->data_table().column_count());
+        for (int64_t i = 0; i < context_->data_table().column_count(); i++) {
             column_indices.emplace_back(i);
         }
-        context_->table_storage().table().fetch(output_->data_chunk(), column_indices, rows_, rows_.size(), state);
+        context_->data_table().fetch(output_->data_chunk(), column_indices, rows_, rows_.size(), state);
     }
 
 } // namespace components::table::operators

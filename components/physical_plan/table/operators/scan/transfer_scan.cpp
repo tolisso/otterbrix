@@ -15,17 +15,17 @@ namespace components::table::operators {
             return; //limit = 0
         }
 
-        auto types = context_->table_storage().table().copy_types();
+        auto types = context_->data_table().copy_types();
         output_ = base::operators::make_operator_data(context_->resource(), types);
         std::vector<table::storage_index_t> column_indices;
-        column_indices.reserve(context_->table_storage().table().column_count());
-        for (int64_t i = 0; i < context_->table_storage().table().column_count(); i++) {
+        column_indices.reserve(context_->data_table().column_count());
+        for (int64_t i = 0; i < context_->data_table().column_count(); i++) {
             column_indices.emplace_back(i);
         }
         table::table_scan_state state(std::pmr::get_default_resource());
-        context_->table_storage().table().initialize_scan(state, column_indices);
+        context_->data_table().initialize_scan(state, column_indices);
         // TODO: check limit inside scan
-        context_->table_storage().table().scan(output_->data_chunk(), state);
+        context_->data_table().scan(output_->data_chunk(), state);
         if (limit_.limit() >= 0) {
             output_->data_chunk().set_cardinality(std::min<size_t>(output_->data_chunk().size(), limit_.limit()));
         }
