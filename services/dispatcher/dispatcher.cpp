@@ -314,7 +314,60 @@ namespace services::dispatcher {
                 if (check_result->is_error()) {
                     error = std::move(check_result);
                 } else {
-                    used_format = check_result->uses_table_data() ? used_format_t::columns : used_format_t::documents;
+                    // Получаем реальный формат из catalog, а не полагаемся на uses_table_data()
+                    // которая не различает columns и document_table
+                    if (!logic_plan->collection_full_name().empty()) {
+                        table_id tid(resource(), logic_plan->collection_full_name());
+                        used_format = catalog_.get_table_format(tid);
+
+                        // Pre-execution catalog update for document_table INSERT
+                        if (used_format == used_format_t::document_table &&
+                            logic_plan->type() == node_type::insert_t &&
+                            catalog_.table_computes(tid)) {
+                            auto& comp_sch = catalog_.get_computing_table_schema(tid);
+                            std::string type_error;
+
+                            // Extract schema from INSERT data and update catalog with type checking
+                            if (logic_plan->children().size() > 0 &&
+                                logic_plan->children().back()->type() == node_type::data_t) {
+                                auto node_info = reinterpret_cast<node_data_ptr&>(logic_plan->children().back());
+
+                                if (node_info->uses_documents()) {
+                                    for (const auto& doc : node_info->documents()) {
+                                        for (const auto& [key, value] : *doc->json_trie()->as_object()) {
+                                            auto key_val = key->get_mut()->get_string().value();
+                                            auto log_type = components::base::operators::type_from_json(value.get());
+                                            type_error = comp_sch.try_append(std::pmr::string(key_val, resource()), log_type);
+                                            if (!type_error.empty()) {
+                                                break;
+                                            }
+                                        }
+                                        if (!type_error.empty()) {
+                                            break;
+                                        }
+                                    }
+                                } else if (node_info->uses_data_chunk()) {
+                                    const auto& chunk_types = node_info->data_chunk().types();
+                                    for (const auto& col_type : chunk_types) {
+                                        if (col_type.has_alias()) {
+                                            type_error = comp_sch.try_append(
+                                                std::pmr::string(col_type.alias(), resource()), col_type);
+                                            if (!type_error.empty()) {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (!type_error.empty()) {
+                                    error = make_cursor(resource(), error_code_t::schema_error, type_error);
+                                }
+                            }
+                        }
+                    } else {
+                        // Для запросов без коллекции (raw data) определяем по типу данных
+                        used_format = check_result->uses_table_data() ? used_format_t::columns : used_format_t::documents;
+                    }
                 }
             }
         }
@@ -653,12 +706,18 @@ namespace services::dispatcher {
                 auto* data_node = reinterpret_cast<components::logical_plan::node_data_t*>(node);
                 if (check == used_format_t::undefined) {
                     check = static_cast<used_format_t>(data_node->uses_data_chunk());
-                } else if (check != static_cast<used_format_t>(data_node->uses_data_chunk())) {
-                    result =
-                        make_cursor(resource(),
-                                    error_code_t::incompatible_storage_types,
-                                    "logical plan data format is not the same as referenced collection data format");
-                    return false;
+                } else {
+                    // Both columns and document_table use data chunks, so they're compatible
+                    bool check_uses_chunks = (check == used_format_t::columns || check == used_format_t::document_table);
+                    bool data_uses_chunks = data_node->uses_data_chunk();
+
+                    if (check_uses_chunks != data_uses_chunks) {
+                        result =
+                            make_cursor(resource(),
+                                        error_code_t::incompatible_storage_types,
+                                        "logical plan data format is not the same as referenced collection data format");
+                        return false;
+                    }
                 }
 
                 // convert data_chunk to documents
@@ -725,6 +784,19 @@ namespace services::dispatcher {
             } else if (check == used_format_t::undefined) {
                 return true;
             }
+
+            // Allow compatibility between columns and document_table (both use data chunks)
+            bool used_is_chunk = (used_format == used_format_t::columns || used_format == used_format_t::document_table);
+            bool check_is_chunk = (check == used_format_t::columns || check == used_format_t::document_table);
+            if (used_is_chunk && check_is_chunk) {
+                return true;
+            }
+
+            // Allow documents to be inserted into document_table (physical plan will handle conversion)
+            if (used_format == used_format_t::document_table && check == used_format_t::documents) {
+                return true;
+            }
+
             result = make_cursor(resource(),
                                  error_code_t::incompatible_storage_types,
                                  "logical plan data format is not the same as referenced collection data format");
@@ -751,6 +823,10 @@ namespace services::dispatcher {
                 return make_cursor(resource(), std::pmr::vector<components::document::document_ptr>{resource()});
             case used_format_t::columns:
                 return make_cursor(resource(), components::vector::data_chunk_t{resource(), {}, 0});
+            case used_format_t::document_table:
+                // document_table также использует data_chunk, но нуждается в специальных операторах
+                return make_cursor(resource(), components::vector::data_chunk_t{resource(), {}, 0});
+            case used_format_t::undefined:
             default:
                 return make_cursor(resource(), error_code_t::incompatible_storage_types, "undefined storage format");
         }
@@ -774,7 +850,8 @@ namespace services::dispatcher {
             case node_type::create_collection_t: {
                 auto node_info = reinterpret_cast<node_create_collection_ptr&>(node);
                 if (node_info->schema().empty()) {
-                    auto err = catalog_.create_computing_table(id);
+                    // Передаём storage_format из логического плана в catalog
+                    auto err = catalog_.create_computing_table(id, node_info->storage_format());
                     assert(!err);
                 } else {
                     std::vector<components::types::field_description> desc;
@@ -806,6 +883,12 @@ namespace services::dispatcher {
                     break;
                 }
 
+                // Skip catalog update for document_table - already done in execute_plan with type checking
+                if (catalog_.table_computes(id) &&
+                    catalog_.get_computing_table_schema(id).storage_format() == used_format_t::document_table) {
+                    break;
+                }
+
                 std::optional<std::reference_wrapper<computed_schema>> comp_sch;
                 std::optional<std::reference_wrapper<const schema>> sch;
                 if (catalog_.table_computes(id)) {
@@ -824,20 +907,21 @@ namespace services::dispatcher {
                             if (comp_sch.has_value()) {
                                 comp_sch.value().get().append(std::pmr::string(key_val), log_type);
                             }
-                            // else { // todo: type conversion tree
-                            //     auto asserted_type = sch.value().get().find_field(std::pmr::string(key_val));
-                            //     if (asserted_type != log_type) {
-                            //         error(log_,
-                            //               "Schema failure: inserted value of incorrect type into column {}",
-                            //               std::string(key_val));
-                            //         result_storage_[session] =
-                            //             make_cursor(resource(), error_code_t::other_error, "Schema failure");
-                            //     }
-                            // }
                         }
                     }
                     break;
                 }
+                // Handle data_chunk for non-document_table formats
+                if (node_info->uses_data_chunk() && comp_sch.has_value()) {
+                    const auto& chunk_types = node_info->data_chunk().types();
+                    for (const auto& col_type : chunk_types) {
+                        if (col_type.has_alias()) {
+                            comp_sch.value().get().append(std::pmr::string(col_type.alias(), resource()), col_type);
+                        }
+                    }
+                    break;
+                }
+                break;
             }
             case node_type::delete_t: {
                 if (catalog_.table_computes(id)) {

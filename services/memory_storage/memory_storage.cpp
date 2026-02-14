@@ -240,13 +240,20 @@ namespace services {
         trace(log_, "memory_storage_t:create_collection {}", logical_plan->collection_full_name().to_string());
         auto create_collection_plan =
             reinterpret_cast<const components::logical_plan::node_create_collection_ptr&>(logical_plan);
-        if (create_collection_plan->schema().empty()) {
+
+        auto storage_format = create_collection_plan->storage_format();
+
+        // If storage format is explicitly set to document_table
+        if (storage_format == components::catalog::used_format_t::document_table) {
             collections_.emplace(logical_plan->collection_full_name(),
                                  new collection::context_collection_t(resource(),
                                                                       logical_plan->collection_full_name(),
+                                                                      collection::storage_type_t::DOCUMENT_TABLE,
                                                                       manager_disk_,
                                                                       log_.clone()));
-        } else {
+        }
+        // If schema is provided and storage not explicitly set, use columnar
+        else if (!create_collection_plan->schema().empty()) {
             std::vector<components::table::column_definition_t> columns;
             columns.reserve(create_collection_plan->schema().size());
             for (const auto& type : create_collection_plan->schema()) {
@@ -256,6 +263,14 @@ namespace services {
                                  new collection::context_collection_t(resource(),
                                                                       logical_plan->collection_full_name(),
                                                                       std::move(columns),
+                                                                      manager_disk_,
+                                                                      log_.clone()));
+        }
+        // Default: B-tree document storage
+        else {
+            collections_.emplace(logical_plan->collection_full_name(),
+                                 new collection::context_collection_t(resource(),
+                                                                      logical_plan->collection_full_name(),
                                                                       manager_disk_,
                                                                       log_.clone()));
         }

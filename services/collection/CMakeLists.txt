@@ -18,6 +18,7 @@ target_link_libraries(
         otterbrix_${PROJECT_NAME} PUBLIC
         otterbrix::table
         otterbrix::document
+        otterbrix::document_table
         otterbrix::types
         otterbrix::cursor
         otterbrix::session

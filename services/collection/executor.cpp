@@ -1,5 +1,6 @@
 #include "executor.hpp"
 
+#include <stdexcept>
 #include <components/index/disk/route.hpp>
 #include <components/physical_plan/collection/operators/operator_delete.hpp>
 #include <components/physical_plan/collection/operators/operator_insert.hpp>
@@ -100,6 +101,10 @@ namespace services::collection::executor {
             plan = table::planner::create_plan(context_storage,
                                                logical_plan,
                                                components::logical_plan::limit_t::unlimit());
+        } else if (data_format == components::catalog::used_format_t::document_table) {
+            plan = document_table::planner::create_plan(context_storage,
+                                                        logical_plan,
+                                                        components::logical_plan::limit_t::unlimit());
         }
 
         if (!plan) {
@@ -178,7 +183,13 @@ namespace services::collection::executor {
             return;
         }
         components::pipeline::context_t pipeline_context{session, address(), memory_storage_, parameters};
-        plan->on_execute(&pipeline_context);
+        try {
+            plan->on_execute(&pipeline_context);
+        } catch (const std::exception& e) {
+            execute_sub_plan_finish_(session,
+                                     make_cursor(resource(), error_code_t::other_error, e.what()));
+            return;
+        }
         if (!plan->is_executed()) {
             sessions::make_session(
                 collection->sessions(),
@@ -224,6 +235,7 @@ namespace services::collection::executor {
         components::base::operators::operator_write_data_t::updated_types_map_t updates) {
         if (result->is_error() || !plans_.contains(session)) {
             execute_plan_finish_(session, std::move(result), std::move(updates));
+            return;
         }
         auto& plan = plans_.at(session);
         if (plan.sub_plans.size() == 1) {
@@ -384,8 +396,18 @@ namespace services::collection::executor {
         trace(log_,
               "executor::execute_plan : operators::operator_type::insert {}",
               plan->output() ? plan->output()->size() : 0);
+        
+        // DEBUG: Log storage type and output info
+        trace(log_, 
+              "executor::insert_document_impl DEBUG: storage_type={}, has_output={}, uses_documents={}, uses_data_chunk={}",
+              static_cast<int>(collection->storage_type()),
+              plan->output() != nullptr,
+              plan->output() ? plan->output()->uses_documents() : false,
+              plan->output() ? plan->output()->uses_data_chunk() : false);
+        
         // TODO: disk support for data_table
         if (!plan->output() || plan->output()->uses_documents()) {
+            trace(log_, "executor::insert_document_impl: Using documents path");
             actor_zeta::send(collection->disk(),
                              address(),
                              disk::handler_id(disk::route::write_documents),
@@ -407,6 +429,38 @@ namespace services::collection::executor {
             }
             execute_sub_plan_finish_(session, make_cursor(resource(), std::move(documents)));
         } else {
+            trace(log_, "executor::insert_document_impl: Using data_chunk path");
+            // For document_table, use the output data_chunk directly since it already contains the inserted data
+            if (collection->storage_type() == storage_type_t::DOCUMENT_TABLE && plan->output() && plan->output()->uses_data_chunk()) {
+                trace(log_, "executor::insert_document_impl: DOCUMENT_TABLE branch, output size={}", plan->output()->size());
+                // Get reference to the output chunk
+                auto& output_chunk = plan->output()->data_chunk();
+                trace(log_, "executor::insert_document_impl: output_chunk size={}, column_count={}", output_chunk.size(), output_chunk.column_count());
+                
+                // Create a copy for disk
+                components::vector::data_chunk_t chunk_for_disk(resource(), output_chunk.types(), output_chunk.size());
+                output_chunk.copy(chunk_for_disk, 0);
+                trace(log_, "executor::insert_document_impl: Created chunk_for_disk, size={}", chunk_for_disk.size());
+                
+                actor_zeta::send(collection->disk(),
+                                 address(),
+                                 disk::handler_id(disk::route::write_documents),
+                                 session,
+                                 collection->name().database,
+                                 collection->name().collection,
+                                 std::move(chunk_for_disk));
+                
+                // Create another copy for the cursor
+                components::vector::data_chunk_t chunk_for_cursor(resource(), output_chunk.types(), output_chunk.size());
+                output_chunk.copy(chunk_for_cursor, 0);
+                trace(log_, "executor::insert_document_impl: Created chunk_for_cursor, size={}, creating cursor", chunk_for_cursor.size());
+                execute_sub_plan_finish_(session, make_cursor(resource(), std::move(chunk_for_cursor)));
+                trace(log_, "executor::insert_document_impl: DOCUMENT_TABLE branch completed");
+                return;
+            }
+            
+            trace(log_, "executor::insert_document_impl: Not DOCUMENT_TABLE or conditions not met, using regular table path");
+            
             actor_zeta::send(collection->disk(),
                              address(),
                              disk::handler_id(disk::route::write_documents),

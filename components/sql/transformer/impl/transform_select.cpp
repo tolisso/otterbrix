@@ -132,6 +132,18 @@ namespace components::sql::transform {
                             }
                         }
 
+                        std::string arg;
+                        // Check if the argument is * (like COUNT(*))
+                        if (func->args && !func->args->lst.empty()) {
+                            auto first_arg = func->args->lst.front().data;
+                            if (nodeTag(first_arg) == T_A_Star) {
+                                arg = "*";
+                            } else if (nodeTag(first_arg) == T_ColumnRef) {
+                                arg = std::string{
+                                    strVal(pg_ptr_cast<ColumnRef>(first_arg)->fields->lst.front().data)};
+                            }
+                        }
+
                         std::string expr_name;
                         if (res->name) {
                             expr_name = res->name;

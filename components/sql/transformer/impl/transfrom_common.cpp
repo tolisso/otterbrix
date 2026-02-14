@@ -48,7 +48,7 @@ namespace components::sql::transform {
                     case T_Integer:
                         return types::logical_value_t(intVal(value));
                     case T_Float:
-                        return types::logical_value_t(static_cast<float>(floatVal(value)));
+                        return types::logical_value_t(floatVal(value));
                 }
             }
             case T_RowExpr: {

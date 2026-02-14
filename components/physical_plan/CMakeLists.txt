@@ -81,6 +81,14 @@ set(${PROJECT_NAME}_SOURCES
         table/operators/operator_join.cpp
 
         table/operators/transformation.cpp
+
+        document_table/operators/scan/full_scan.cpp
+        document_table/operators/scan/primary_key_scan.cpp
+        document_table/operators/aggregation.cpp
+        document_table/operators/columnar_group.cpp
+        document_table/operators/operator_insert.cpp
+        document_table/operators/operator_delete.cpp
+        document_table/operators/operator_update.cpp
 )
 
 add_library(otterbrix_${PROJECT_NAME}
