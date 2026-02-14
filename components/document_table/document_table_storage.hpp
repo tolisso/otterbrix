@@ -41,6 +41,11 @@ namespace components::document_table {
         // Batch insert documents
         void batch_insert(const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents);
 
+        // Prepare insert: evolve schema + convert documents to data_chunk + update id_to_row.
+        // Does NOT append to data_table (caller should do table()->append()).
+        vector::data_chunk_t prepare_insert(
+            const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents);
+
         // Get document by ID
         document::document_ptr get(const document::document_id_t& id);
 

@@ -29,6 +29,7 @@ namespace components::logical_plan {
         bool uses_documents() const;
 
         void convert_to_documents();
+        void set_data_chunk(components::vector::data_chunk_t&& chunk);
 
         size_t size() const;
 

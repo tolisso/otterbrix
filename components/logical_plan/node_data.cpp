@@ -94,6 +94,10 @@ namespace components::logical_plan {
         data_ = std::move(documents);
     }
 
+    void node_data_t::set_data_chunk(components::vector::data_chunk_t&& chunk) {
+        data_ = std::move(chunk);
+    }
+
     size_t node_data_t::size() const {
         if (std::holds_alternative<std::pmr::vector<document::document_ptr>>(data_)) {
             return std::get<std::pmr::vector<document::document_ptr>>(data_).size();

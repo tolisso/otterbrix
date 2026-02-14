@@ -15,7 +15,7 @@ static const collection_name_t collection_name = "bluesky";
 static constexpr size_t DOC_LIMIT = 100000;
 
 // Set to true to also benchmark document (B-tree) storage
-static constexpr bool TEST_DOCUMENT_STORAGE = false;
+static constexpr bool TEST_DOCUMENT_STORAGE = true;
 
 using components::cursor::cursor_t_ptr;
 namespace types = components::types;

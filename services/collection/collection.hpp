@@ -159,6 +159,13 @@ namespace services::collection {
 
         storage_type_t storage_type() const noexcept { return storage_type_; }
 
+        // Unified data_table access for both TABLE_COLUMNS and DOCUMENT_TABLE
+        components::table::data_table_t& data_table() {
+            if (storage_type_ == storage_type_t::DOCUMENT_TABLE)
+                return *document_table_storage_.storage().table();
+            return table_storage_.table();
+        }
+
         components::index::index_engine_ptr& index_engine() noexcept { return index_engine_; }
 
         std::pmr::memory_resource* resource() const noexcept { return resource_; }

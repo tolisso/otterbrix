@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 #include <components/index/disk/route.hpp>
+#include <components/logical_plan/node_data.hpp>
 #include <components/physical_plan/collection/operators/operator_delete.hpp>
 #include <components/physical_plan/collection/operators/operator_insert.hpp>
 #include <components/physical_plan/collection/operators/operator_update.hpp>
@@ -90,6 +91,48 @@ namespace services::collection::executor {
                                   services::context_storage_t&& context_storage,
                                   components::catalog::used_format_t data_format) {
         trace(log_, "executor::execute_plan, session: {}", session.data());
+
+        // Preprocessing: convert document_table INSERT documents → data_chunk
+        // so we can route through the standard table planner
+        if (data_format == components::catalog::used_format_t::document_table &&
+            logical_plan->type() == components::logical_plan::node_type::insert_t) {
+            // Find node_data_t with documents in children
+            for (auto& child : logical_plan->children()) {
+                if (child->type() == components::logical_plan::node_type::data_t) {
+                    auto* data_node = static_cast<components::logical_plan::node_data_t*>(child.get());
+                    if (data_node->uses_documents()) {
+                        // Get context collection
+                        auto it = context_storage.find(logical_plan->collection_full_name());
+                        if (it != context_storage.end() &&
+                            it->second->storage_type() == storage_type_t::DOCUMENT_TABLE) {
+                            auto& storage = it->second->document_table_storage().storage();
+
+                            // Collect (id, doc) pairs
+                            auto& docs = data_node->documents();
+                            std::pmr::vector<std::pair<components::document::document_id_t,
+                                                       components::document::document_ptr>>
+                                pairs(resource());
+                            pairs.reserve(docs.size());
+                            for (const auto& doc : docs) {
+                                if (doc && doc->is_valid()) {
+                                    pairs.emplace_back(components::document::get_document_id(doc), doc);
+                                }
+                            }
+
+                            // Convert: schema evolution + documents → data_chunk + id_to_row update
+                            auto chunk = storage.prepare_insert(pairs);
+
+                            // Replace documents with data_chunk in logical plan
+                            data_node->set_data_chunk(std::move(chunk));
+
+                            // Route through table planner
+                            data_format = components::catalog::used_format_t::columns;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
 
         // TODO: this does not handle cross documents/columns operations
         components::base::operators::operator_ptr plan;

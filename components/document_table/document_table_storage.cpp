@@ -530,4 +530,81 @@ namespace components::document_table {
         }
     }
 
+    vector::data_chunk_t document_table_storage_t::prepare_insert(
+        const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents) {
+
+        if (documents.empty()) {
+            return vector::data_chunk_t(resource_, table_->copy_types());
+        }
+
+        // Step 1: Evolve schema from all documents
+        for (const auto& [id, doc] : documents) {
+            if (!doc || !doc->is_valid()) {
+                continue;
+            }
+            auto new_columns = evolve_from_document(doc);
+            if (!new_columns.empty()) {
+                evolve_schema(new_columns);
+            }
+        }
+
+        // Step 2: Build column path cache (column_name → document path)
+        std::vector<std::string> doc_paths;
+        doc_paths.reserve(column_count());
+        for (size_t i = 0; i < column_count(); ++i) {
+            const auto* col_info = get_column_by_index(i);
+            if (col_info->json_path == "_id") {
+                doc_paths.emplace_back("");
+            } else {
+                doc_paths.emplace_back(column_name_to_document_path(col_info->json_path));
+            }
+        }
+
+        // Step 3: Create one data_chunk for all documents
+        auto types = table_->copy_types();
+        vector::data_chunk_t chunk(resource_, types, documents.size());
+        chunk.set_cardinality(documents.size());
+
+        // Step 4: Fill the chunk
+        for (size_t row = 0; row < documents.size(); ++row) {
+            const auto& [id, doc] = documents[row];
+
+            if (!doc || !doc->is_valid()) {
+                for (size_t col = 0; col < column_count(); ++col) {
+                    chunk.data[col].set_null(row, true);
+                }
+                id_to_row_[id] = next_row_id_++;
+                continue;
+            }
+
+            for (size_t col = 0; col < column_count(); ++col) {
+                const auto* col_info = get_column_by_index(col);
+                auto& vec = chunk.data[col];
+
+                if (col_info->json_path == "_id") {
+                    std::string id_str(reinterpret_cast<const char*>(id.data()), id.size);
+                    vec.set_value(row, types::logical_value_t(id_str));
+                    continue;
+                }
+
+                const auto& doc_path = doc_paths[col];
+                if (!doc->is_exists(doc_path)) {
+                    vec.set_null(row, true);
+                    continue;
+                }
+
+                auto value = extract_value_from_document(doc, col_info->json_path, col_info->type.type());
+                if (value.is_null()) {
+                    vec.set_null(row, true);
+                } else {
+                    vec.set_value(row, value);
+                }
+            }
+
+            id_to_row_[id] = next_row_id_++;
+        }
+
+        return chunk;
+    }
+
 } // namespace components::document_table

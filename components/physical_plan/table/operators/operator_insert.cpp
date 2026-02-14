@@ -13,16 +13,17 @@ namespace components::table::operators {
                                                           left_->output()->data_chunk().types(),
                                                           left_->output()->data_chunk().size());
             table::table_append_state state(context_->resource());
-            context_->table_storage().table().append_lock(state);
-            context_->table_storage().table().initialize_append(state);
+            auto& dt = context_->data_table();
+            dt.append_lock(state);
+            dt.initialize_append(state);
             for (size_t id = 0; id < left_->output()->data_chunk().size(); id++) {
                 modified_->append(id + state.row_start);
                 context_->index_engine()->insert_row(left_->output()->data_chunk(),
                                                      id + state.row_start,
                                                      pipeline_context);
             }
-            context_->table_storage().table().append(left_->output()->data_chunk(), state);
-            context_->table_storage().table().finalize_append(state);
+            dt.append(left_->output()->data_chunk(), state);
+            dt.finalize_append(state);
             left_->output()->data_chunk().copy(output_->data_chunk(), 0);
         }
     }
