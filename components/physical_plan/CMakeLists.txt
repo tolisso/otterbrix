@@ -77,6 +77,7 @@ set(${PROJECT_NAME}_SOURCES
         table/operators/operator_update.cpp
         table/operators/operator_match.cpp
         table/operators/operator_group.cpp
+        table/operators/columnar_group.cpp
         table/operators/operator_sort.cpp
         table/operators/operator_join.cpp
 

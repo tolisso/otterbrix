@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./build.sh:*)",
+      "Bash(./integration/cpp/test/integration_tests:*)",
+      "Bash(./integration/cpp/test/test_otterbrix:*)",
+      "Bash(python3:*)",
+      "Bash(./build/integration/cpp/test/test_otterbrix:*)",
+      "Bash(./build/services/dispatcher/tests/test_dispatcher:*)",
+      "Bash(ninja test_dispatcher:*)",
+      "Bash(/home/tolisso/otterbrix/build/services/dispatcher/tests/test_dispatcher:*)",
+      "Bash(/home/tolisso/otterbrix/build/components/document_table/test/otterbrix_test_document_table:*)",
+      "Bash(git stash:*)",
+      "Bash(ninja:*)",
+      "Bash(/home/tolisso/otterbrix/build/integration/cpp/test/test_otterbrix:*)",
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(./test_local.sh:*)",
+      "Bash(./build/integration/cpp/test/otterbrix_integration_test:*)",
+      "Bash(gdb:*)"
+    ]
+  }
+}

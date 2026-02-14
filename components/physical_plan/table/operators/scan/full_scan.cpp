@@ -56,6 +56,10 @@ namespace components::table::operators {
         , expression_(expression)
         , limit_(limit) {}
 
+    void full_scan::set_projection(std::vector<std::string> columns) {
+        projection_columns_ = std::move(columns);
+    }
+
     void full_scan::on_execute_impl(pipeline::context_t* pipeline_context) {
         trace(context_->log(), "full_scan");
         int count = 0;
@@ -63,16 +67,40 @@ namespace components::table::operators {
             return; //limit = 0
         }
 
-        auto types = context_->data_table().copy_types();
-        output_ = base::operators::make_operator_data(context_->resource(), types);
+        auto all_types = context_->data_table().copy_types();
+
+        // Determine which columns to scan
         std::vector<table::storage_index_t> column_indices;
-        column_indices.reserve(context_->data_table().column_count());
-        for (int64_t i = 0; i < context_->data_table().column_count(); i++) {
-            column_indices.emplace_back(i);
+        std::pmr::vector<types::complex_logical_type> output_types(context_->resource());
+
+        if (projection_columns_.empty()) {
+            // No projection - scan all columns
+            column_indices.reserve(context_->data_table().column_count());
+            output_types = all_types;
+            for (int64_t i = 0; i < context_->data_table().column_count(); i++) {
+                column_indices.emplace_back(i);
+            }
+        } else {
+            // Projection specified - scan only requested columns
+            column_indices.reserve(projection_columns_.size());
+            output_types.reserve(projection_columns_.size());
+            for (const auto& col_name : projection_columns_) {
+                std::string alt_name = "/" + col_name;
+                for (size_t i = 0; i < all_types.size(); ++i) {
+                    const auto& alias = all_types[i].alias();
+                    if (alias == col_name || alias == alt_name) {
+                        column_indices.emplace_back(i);
+                        output_types.push_back(all_types[i]);
+                        break;
+                    }
+                }
+            }
         }
+
+        output_ = base::operators::make_operator_data(context_->resource(), output_types);
         table::table_scan_state state(context_->resource());
         auto filter =
-            transform_predicate(expression_, types, pipeline_context ? &pipeline_context->parameters : nullptr);
+            transform_predicate(expression_, all_types, pipeline_context ? &pipeline_context->parameters : nullptr);
         context_->data_table().initialize_scan(state, column_indices, filter.get());
         // TODO: check limit inside scan
         context_->data_table().scan(output_->data_chunk(), state);

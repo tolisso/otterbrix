@@ -79,7 +79,8 @@ namespace services::table::planner::impl {
     components::base::operators::operator_ptr
     create_plan_match_(collection::context_collection_t* context_,
                        const components::expressions::compare_expression_ptr& expr,
-                       components::logical_plan::limit_t limit) {
+                       components::logical_plan::limit_t limit,
+                       const std::vector<std::string>& projection = {}) {
         //if (is_can_primary_key_find_by_predicate(expr->type()) && expr->key().as_string() == "_id") {
         //return boost::intrusive_ptr(new components::table::operators::primary_key_scan(context_));
         //}
@@ -88,7 +89,11 @@ namespace services::table::planner::impl {
                 components::index::search_index(context_->index_engine(), {expr->primary_key()})) {
                 return boost::intrusive_ptr(new components::table::operators::index_scan(context_, expr, limit));
             }
-            return boost::intrusive_ptr(new components::table::operators::full_scan(context_, expr, limit));
+            auto scan = new components::table::operators::full_scan(context_, expr, limit);
+            if (!projection.empty()) {
+                scan->set_projection(projection);
+            }
+            return boost::intrusive_ptr(scan);
         } else {
             return boost::intrusive_ptr(new components::table::operators::operator_match_t(context_, expr, limit));
         }
@@ -97,13 +102,23 @@ namespace services::table::planner::impl {
     components::base::operators::operator_ptr create_plan_match(const context_storage_t& context,
                                                                 const components::logical_plan::node_ptr& node,
                                                                 components::logical_plan::limit_t limit) {
+        return create_plan_match(context, node, limit, {});
+    }
+
+    components::base::operators::operator_ptr create_plan_match(const context_storage_t& context,
+                                                                const components::logical_plan::node_ptr& node,
+                                                                components::logical_plan::limit_t limit,
+                                                                const std::vector<std::string>& projection) {
         if (node->expressions().empty()) {
-            return boost::intrusive_ptr(
-                new components::table::operators::transfer_scan(context.at(node->collection_full_name()), limit));
-        } else { //todo: other kinds scan
+            auto scan = new components::table::operators::full_scan(context.at(node->collection_full_name()), nullptr, limit);
+            if (!projection.empty()) {
+                scan->set_projection(projection);
+            }
+            return boost::intrusive_ptr(scan);
+        } else {
             auto expr =
                 reinterpret_cast<const components::expressions::compare_expression_ptr*>(&node->expressions()[0]);
-            return create_plan_match_(context.at(node->collection_full_name()), *expr, limit);
+            return create_plan_match_(context.at(node->collection_full_name()), *expr, limit, projection);
         }
     }
 
