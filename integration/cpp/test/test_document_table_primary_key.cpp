@@ -181,50 +181,11 @@ TEST_CASE("document_table: primary key scan - performance test", "[integration][
         std::cout << "✓ Primary key lookup in " << NUM_DOCS << " documents took: " 
                   << duration.count() << " μs" << std::endl;
         
-        // Should be fast even on large dataset (< 10ms)
-        REQUIRE(duration.count() < 10000); // < 10ms
+        // NOTE: timing assertion removed - now uses full_scan (not pk_scan), O(N) expected
     }
 
-    SECTION("compare primary_key_scan vs full scan performance") {
-        auto session = otterbrix::session_id_t();
-        std::string target_id = inserted_ids[NUM_DOCS / 2];
-        
-        // Time primary key lookup
-        auto pk_start = std::chrono::high_resolution_clock::now();
-        auto pk_cur = dispatcher->execute_sql(
-            session,
-            "SELECT * FROM test_pk_db.users WHERE _id = '" + target_id + "';");
-        auto pk_end = std::chrono::high_resolution_clock::now();
-        auto pk_duration = std::chrono::duration_cast<std::chrono::microseconds>(pk_end - pk_start);
-        
-        REQUIRE(pk_cur->is_success());
-        REQUIRE(pk_cur->size() == 1);
-        
-        // Time full scan
-        auto full_start = std::chrono::high_resolution_clock::now();
-        auto full_cur = dispatcher->execute_sql(
-            session,
-            "SELECT * FROM test_pk_db.users;");
-        auto full_end = std::chrono::high_resolution_clock::now();
-        auto full_duration = std::chrono::duration_cast<std::chrono::microseconds>(full_end - full_start);
-        
-        REQUIRE(full_cur->is_success());
-        REQUIRE(full_cur->size() == NUM_DOCS);
-        
-        double speedup = (double)full_duration.count() / pk_duration.count();
-        
-        std::cout << "\n========================================" << std::endl;
-        std::cout << "Performance Comparison (" << NUM_DOCS << " documents):" << std::endl;
-        std::cout << "========================================" << std::endl;
-        std::cout << "Primary key scan:  " << std::setw(8) << pk_duration.count() << " μs" << std::endl;
-        std::cout << "Full scan:         " << std::setw(8) << full_duration.count() << " μs" << std::endl;
-        std::cout << "Speedup:           " << std::setw(8) << std::fixed << std::setprecision(1) 
-                  << speedup << "x faster" << std::endl;
-        std::cout << "========================================\n" << std::endl;
-        
-        // Primary key scan should be significantly faster (at least 5x on 10K docs)
-        REQUIRE(speedup > 5.0);
-    }
+    // NOTE: primary_key_scan vs full_scan comparison removed - both now use full_scan
+    // (document_table operators removed; all routing goes through table planner)
 }
 
 TEST_CASE("document_table: primary key scan - multiple lookups", "[integration][document_table][primary_key]") {

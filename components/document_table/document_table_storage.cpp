@@ -45,14 +45,9 @@ namespace components::document_table {
         , id_to_row_(10, document_id_hash_t{}, std::equal_to<document::document_id_t>{}, resource)
         , next_row_id_(0) {
 
-        // Add _id column
-        types::complex_logical_type id_type(types::logical_type::STRING_LITERAL);
-        id_type.set_alias("_id");
-        add_column("_id", id_type);
-
-        // Create initial table with _id column
-        auto column_defs = to_column_definitions();
-        table_ = std::make_unique<table::data_table_t>(resource_, block_manager_, std::move(column_defs));
+        // Start with empty schema - columns are added dynamically on first insert
+        table_ = std::make_unique<table::data_table_t>(resource_, block_manager_,
+                                                        std::vector<table::column_definition_t>{});
     }
 
     // Column management methods
@@ -522,12 +517,6 @@ namespace components::document_table {
                     const auto* col_info = get_column_by_index(col_idx);
                     auto& vec = batch_chunk.data[col_idx];
 
-                    if (col_info->json_path == "_id") {
-                        std::string id_str(reinterpret_cast<const char*>(id.data()), id.size);
-                        vec.set_value(batch_idx, types::logical_value_t(id_str));
-                        continue;
-                    }
-
                     auto it = path_values.find(col_info->json_path);
                     if (it != path_values.end() && !it->second.is_null()) {
                         vec.set_value(batch_idx, it->second);
@@ -573,11 +562,7 @@ namespace components::document_table {
         doc_paths.reserve(column_count());
         for (size_t i = 0; i < column_count(); ++i) {
             const auto* col_info = get_column_by_index(i);
-            if (col_info->json_path == "_id") {
-                doc_paths.emplace_back("");
-            } else {
-                doc_paths.emplace_back(column_name_to_document_path(col_info->json_path));
-            }
+            doc_paths.emplace_back(column_name_to_document_path(col_info->json_path));
         }
 
         // Step 3: Create one data_chunk for all documents
@@ -600,12 +585,6 @@ namespace components::document_table {
             for (size_t col = 0; col < column_count(); ++col) {
                 const auto* col_info = get_column_by_index(col);
                 auto& vec = chunk.data[col];
-
-                if (col_info->json_path == "_id") {
-                    std::string id_str(reinterpret_cast<const char*>(id.data()), id.size);
-                    vec.set_value(row, types::logical_value_t(id_str));
-                    continue;
-                }
 
                 const auto& doc_path = doc_paths[col];
                 if (!doc->is_exists(doc_path)) {
