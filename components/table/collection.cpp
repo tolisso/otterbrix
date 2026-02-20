@@ -44,10 +44,12 @@ namespace components::table {
 
     void collection_t::initialize_scan(collection_scan_state& state, const std::vector<storage_index_t>& column_ids) {
         auto row_group = row_groups_->root_segment();
-        assert(row_group);
         state.row_groups = row_groups_.get();
         state.max_row = row_start_ + total_rows_;
         state.initialize(types_);
+        if (!row_group) {
+            return; // Empty collection - no rows to scan
+        }
         while (row_group && !row_group->initialize_scan(state)) {
             row_group = row_groups_->next_segment(row_group);
         }

@@ -22,6 +22,9 @@ namespace components::table::operators {
         for (int64_t i = 0; i < context_->data_table().column_count(); i++) {
             column_indices.emplace_back(i);
         }
+        if (column_indices.empty()) {
+            return; // 0-column table: nothing to scan
+        }
         table::table_scan_state state(std::pmr::get_default_resource());
         context_->data_table().initialize_scan(state, column_indices);
         // TODO: check limit inside scan

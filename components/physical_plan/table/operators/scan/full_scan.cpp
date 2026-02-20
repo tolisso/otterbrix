@@ -100,6 +100,9 @@ namespace components::table::operators {
         }
 
         output_ = base::operators::make_operator_data(context_->resource(), output_types);
+        if (column_indices.empty()) {
+            return; // 0-column table: nothing to scan
+        }
         table::table_scan_state state(context_->resource());
         auto filter =
             transform_predicate(expression_, all_types, pipeline_context ? &pipeline_context->parameters : nullptr);
