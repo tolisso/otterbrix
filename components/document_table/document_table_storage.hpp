@@ -77,6 +77,9 @@ namespace components::document_table {
         table::data_table_t* table() { return table_.get(); }
         const table::data_table_t* table() const { return table_.get(); }
 
+        // Evolve schema from data_chunk column types (for SQL INSERT VALUES path)
+        void evolve_schema_from_types(const std::pmr::vector<types::complex_logical_type>& types);
+
         // Document count
         size_t size() const { return id_to_row_.size(); }
 

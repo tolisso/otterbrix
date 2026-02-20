@@ -207,6 +207,26 @@ namespace components::document_table {
         }
     }
 
+    void document_table_storage_t::evolve_schema_from_types(
+        const std::pmr::vector<types::complex_logical_type>& types) {
+        std::pmr::vector<column_info_t> new_columns(resource_);
+        for (const auto& col_type : types) {
+            const std::string& col_name = col_type.alias();
+            if (col_name.empty()) {
+                continue;
+            }
+            // Check both col_name and "/" + col_name (document path prefix variant)
+            if (has_column(col_name) || has_column("/" + col_name)) {
+                continue;
+            }
+            add_column(col_name, col_type);
+            new_columns.push_back(columns_.back());
+        }
+        if (!new_columns.empty()) {
+            evolve_schema(new_columns);
+        }
+    }
+
     vector::data_chunk_t document_table_storage_t::document_to_row(const document::document_ptr& doc) {
         auto types = table_->copy_types();
         vector::data_chunk_t chunk(resource_, types);

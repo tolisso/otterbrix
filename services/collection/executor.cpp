@@ -96,18 +96,17 @@ namespace services::collection::executor {
         // so we can route through the standard table planner
         if (data_format == components::catalog::used_format_t::document_table &&
             logical_plan->type() == components::logical_plan::node_type::insert_t) {
-            // Find node_data_t with documents in children
+            // Find node_data_t in children
             for (auto& child : logical_plan->children()) {
                 if (child->type() == components::logical_plan::node_type::data_t) {
                     auto* data_node = static_cast<components::logical_plan::node_data_t*>(child.get());
-                    if (data_node->uses_documents()) {
-                        // Get context collection
-                        auto it = context_storage.find(logical_plan->collection_full_name());
-                        if (it != context_storage.end() &&
-                            it->second->storage_type() == storage_type_t::DOCUMENT_TABLE) {
-                            auto& storage = it->second->document_table_storage().storage();
+                    auto it = context_storage.find(logical_plan->collection_full_name());
+                    if (it != context_storage.end() &&
+                        it->second->storage_type() == storage_type_t::DOCUMENT_TABLE) {
+                        auto& storage = it->second->document_table_storage().storage();
 
-                            // Collect (id, doc) pairs
+                        if (data_node->uses_documents()) {
+                            // API insert: schema evolution + convert documents → data_chunk + id_to_row update
                             auto& docs = data_node->documents();
                             std::pmr::vector<std::pair<components::document::document_id_t,
                                                        components::document::document_ptr>>
@@ -127,9 +126,13 @@ namespace services::collection::executor {
 
                             // Route through table planner
                             data_format = components::catalog::used_format_t::columns;
+                        } else {
+                            // SQL VALUES INSERT: evolve schema for any new columns
+                            storage.evolve_schema_from_types(data_node->data_chunk().types());
+                            // data_format will be changed to columns by the block below
                         }
-                        break;
                     }
+                    break;
                 }
             }
         }
