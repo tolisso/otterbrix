@@ -142,6 +142,8 @@ namespace services::table::planner::impl {
     components::base::operators::operator_ptr create_plan_group(const context_storage_t& context,
                                                                 const components::logical_plan::node_ptr& node) {
         auto collection_context = context.at(node->collection_full_name());
+        // columnar_group requires non-null context for resource allocation
+        assert(collection_context && "create_plan_group: null context for columnar_group");
         auto group = boost::intrusive_ptr(new components::table::operators::columnar_group(collection_context));
 
         for (const auto& expr : node->expressions()) {

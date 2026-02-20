@@ -134,10 +134,13 @@ namespace services::collection::executor {
             }
         }
 
-        // TODO: Route SELECT/DELETE/UPDATE through table planner too.
-        // Currently blocked by: table::operator_group is ~150x slower than columnar_group,
-        // and table::full_scan lacks projection support. Need to port columnar_group
-        // and projection to table operators first.
+        // document_table routes through table planner for all operations.
+        // INSERT was preprocessed above (documents → data_chunk, format set to columns).
+        // SELECT/DELETE/UPDATE go directly to table planner since table operators
+        // now have columnar_group (fast GROUP BY) and projection-aware full_scan.
+        if (data_format == components::catalog::used_format_t::document_table) {
+            data_format = components::catalog::used_format_t::columns;
+        }
 
         // TODO: this does not handle cross documents/columns operations
         components::base::operators::operator_ptr plan;
@@ -149,10 +152,6 @@ namespace services::collection::executor {
             plan = table::planner::create_plan(context_storage,
                                                logical_plan,
                                                components::logical_plan::limit_t::unlimit());
-        } else if (data_format == components::catalog::used_format_t::document_table) {
-            plan = document_table::planner::create_plan(context_storage,
-                                                        logical_plan,
-                                                        components::logical_plan::limit_t::unlimit());
         }
 
         if (!plan) {

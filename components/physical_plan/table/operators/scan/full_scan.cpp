@@ -38,8 +38,10 @@ namespace components::table::operators {
             case expressions::compare_type::invalid:
                 throw std::runtime_error("unsupported compare_type in expression to filter conversion");
             default: {
+                const std::string& key = expression->primary_key().as_string();
+                const std::string alt_key = "/" + key;
                 auto it = std::find_if(types.begin(), types.end(), [&](const types::complex_logical_type& type) {
-                    return type.alias() == expression->primary_key().as_string();
+                    return type.alias() == key || type.alias() == alt_key;
                 });
                 assert(it != types.end());
                 return std::make_unique<table::constant_filter_t>(expression->type(),
