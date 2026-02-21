@@ -13,7 +13,6 @@ set( ${PROJECT_NAME}_SOURCES
         test_index.cpp
         test_join.cpp
         test_connections.cpp
-        test_jsonbench.cpp
         test_document_table_catalog.cpp
 )
 

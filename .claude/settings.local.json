@@ -18,7 +18,10 @@
       "Bash(ls:*)",
       "Bash(./test_local.sh:*)",
       "Bash(./build/integration/cpp/test/otterbrix_integration_test:*)",
-      "Bash(gdb:*)"
+      "Bash(gdb:*)",
+      "Bash(echo:*)",
+      "Bash(ulimit:*)",
+      "Bash(ctest:*)"
     ]
   }
 }
