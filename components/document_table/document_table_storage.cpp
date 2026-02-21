@@ -41,9 +41,7 @@ namespace components::document_table {
         , block_manager_(block_manager)
         , columns_(resource)
         , path_to_index_(resource)
-        , extractor_(std::make_unique<json_path_extractor_t>(resource))
-        , id_to_row_(10, document_id_hash_t{}, std::equal_to<document::document_id_t>{}, resource)
-        , next_row_id_(0) {
+        , extractor_(std::make_unique<json_path_extractor_t>(resource)) {
 
         // Start with empty schema - columns are added dynamically on first insert
         table_ = std::make_unique<table::data_table_t>(resource_, block_manager_,
@@ -128,52 +126,6 @@ namespace components::document_table {
         return new_columns;
     }
 
-    void document_table_storage_t::insert(const document::document_id_t& id, const document::document_ptr& doc) {
-        if (!doc || !doc->is_valid()) {
-            return;
-        }
-
-        auto new_columns = evolve_from_document(doc);
-        if (!new_columns.empty()) {
-            evolve_schema(new_columns);
-        }
-
-        auto row = document_to_row(doc);
-
-        table::table_append_state state(resource_);
-        table_->append_lock(state);
-        table_->initialize_append(state);
-        table_->append(row, state);
-        table_->finalize_append(state);
-
-        id_to_row_[id] = next_row_id_++;
-    }
-
-    document::document_ptr document_table_storage_t::get(const document::document_id_t& id) {
-        return nullptr;
-    }
-
-    void document_table_storage_t::remove(const document::document_id_t& id) {
-        auto it = id_to_row_.find(id);
-        if (it == id_to_row_.end()) {
-            return;
-        }
-
-        size_t row_id = it->second;
-
-        vector::vector_t row_ids(resource_, types::logical_type::UBIGINT);
-        row_ids.set_value(0, types::logical_value_t(static_cast<uint64_t>(row_id)));
-
-        auto delete_state = table_->initialize_delete({});
-        table_->delete_rows(*delete_state, row_ids, 1);
-
-        id_to_row_.erase(it);
-    }
-
-    bool document_table_storage_t::contains(const document::document_id_t& id) const {
-        return id_to_row_.find(id) != id_to_row_.end();
-    }
-
     void document_table_storage_t::scan(vector::data_chunk_t& output, table::table_scan_state& state) {
         table_->scan(output, state);
     }
@@ -182,15 +134,6 @@ namespace components::document_table {
                                                     const std::vector<table::storage_index_t>& column_ids,
                                                     const table::table_filter_t* filter) {
         table_->initialize_scan(state, column_ids, filter);
-    }
-
-    bool document_table_storage_t::get_row_id(const document::document_id_t& id, size_t& row_id) const {
-        auto it = id_to_row_.find(id);
-        if (it == id_to_row_.end()) {
-            return false;
-        }
-        row_id = it->second;
-        return true;
     }
 
     void document_table_storage_t::evolve_schema(const std::pmr::vector<column_info_t>& new_columns) {
@@ -312,71 +255,6 @@ namespace components::document_table {
         return chunk;
     }
 
-    document::document_ptr document_table_storage_t::row_to_document(const vector::data_chunk_t& row, size_t row_idx) {
-        if (row_idx >= row.size()) {
-            return nullptr;
-        }
-
-        auto doc = document::make_document(resource_);
-
-        for (size_t col_idx = 0; col_idx < columns_.size() && col_idx < row.column_count(); ++col_idx) {
-            const auto& col_info = columns_[col_idx];
-            auto value = row.value(col_idx, row_idx);
-
-            if (value.is_null()) {
-                continue;
-            }
-
-            std::string doc_path = col_info.json_path;
-            if (!doc_path.empty() && doc_path[0] != '/') {
-                doc_path = "/" + doc_path;
-            }
-
-            switch (value.type().type()) {
-            case types::logical_type::BOOLEAN:
-                doc->set(doc_path, value.value<bool>());
-                break;
-            case types::logical_type::TINYINT:
-                doc->set(doc_path, value.value<int8_t>());
-                break;
-            case types::logical_type::SMALLINT:
-                doc->set(doc_path, value.value<int16_t>());
-                break;
-            case types::logical_type::INTEGER:
-                doc->set(doc_path, value.value<int32_t>());
-                break;
-            case types::logical_type::BIGINT:
-                doc->set(doc_path, value.value<int64_t>());
-                break;
-            case types::logical_type::UTINYINT:
-                doc->set(doc_path, value.value<uint8_t>());
-                break;
-            case types::logical_type::USMALLINT:
-                doc->set(doc_path, value.value<uint16_t>());
-                break;
-            case types::logical_type::UINTEGER:
-                doc->set(doc_path, value.value<uint32_t>());
-                break;
-            case types::logical_type::UBIGINT:
-                doc->set(doc_path, value.value<uint64_t>());
-                break;
-            case types::logical_type::FLOAT:
-                doc->set(doc_path, value.value<float>());
-                break;
-            case types::logical_type::DOUBLE:
-                doc->set(doc_path, value.value<double>());
-                break;
-            case types::logical_type::STRING_LITERAL:
-                doc->set(doc_path, std::string(value.value<std::string_view>()));
-                break;
-            default:
-                break;
-            }
-        }
-
-        return doc;
-    }
-
     types::logical_type document_table_storage_t::detect_value_type_in_document(const document::document_ptr& doc,
                                                                                 const std::string& json_path) {
         std::string doc_path = column_name_to_document_path(json_path);
@@ -439,106 +317,6 @@ namespace components::document_table {
         return types::logical_value_t();
     }
 
-    std::pmr::unordered_map<std::string, types::logical_value_t>
-    document_table_storage_t::extract_path_values(const document::document_ptr& doc) {
-        std::pmr::unordered_map<std::string, types::logical_value_t> result(resource_);
-
-        if (!doc || !doc->is_valid()) {
-            return result;
-        }
-
-        auto extracted_paths = extractor_->extract_paths(doc);
-
-        for (const auto& path_info : extracted_paths) {
-            std::string doc_path = column_name_to_document_path(path_info.path);
-
-            if (!doc->is_exists(doc_path)) {
-                result[path_info.path] = types::logical_value_t();
-                continue;
-            }
-
-            auto actual_type = detect_value_type_in_document(doc, path_info.path);
-
-            if (actual_type == types::logical_type::NA) {
-                result[path_info.path] = types::logical_value_t();
-                continue;
-            }
-
-            auto value = extract_value_from_document(doc, path_info.path, actual_type);
-            result[path_info.path] = std::move(value);
-        }
-
-        return result;
-    }
-
-    void document_table_storage_t::batch_insert(
-        const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents) {
-
-        if (documents.empty()) {
-            return;
-        }
-
-        // Step 1: Evolve schema from all documents
-        for (const auto& [id, doc] : documents) {
-            if (!doc || !doc->is_valid()) {
-                continue;
-            }
-
-            auto new_columns = evolve_from_document(doc);
-            if (!new_columns.empty()) {
-                evolve_schema(new_columns);
-            }
-        }
-
-        // Step 2: Batch insert
-        constexpr size_t BATCH_SIZE = 1024;
-
-        for (size_t batch_start = 0; batch_start < documents.size(); batch_start += BATCH_SIZE) {
-            size_t batch_end = std::min(batch_start + BATCH_SIZE, documents.size());
-            size_t batch_count = batch_end - batch_start;
-
-            auto types = table_->copy_types();
-            vector::data_chunk_t batch_chunk(resource_, types);
-            batch_chunk.set_cardinality(batch_count);
-
-            for (size_t batch_idx = 0; batch_idx < batch_count; ++batch_idx) {
-                const auto& [id, doc] = documents[batch_start + batch_idx];
-
-                if (!doc || !doc->is_valid()) {
-                    for (size_t col_idx = 0; col_idx < column_count(); ++col_idx) {
-                        batch_chunk.data[col_idx].set_null(batch_idx, true);
-                    }
-                    continue;
-                }
-
-                auto path_values = extract_path_values(doc);
-
-                for (size_t col_idx = 0; col_idx < column_count(); ++col_idx) {
-                    const auto* col_info = get_column_by_index(col_idx);
-                    auto& vec = batch_chunk.data[col_idx];
-
-                    auto it = path_values.find(col_info->json_path);
-                    if (it != path_values.end() && !it->second.is_null()) {
-                        vec.set_value(batch_idx, it->second);
-                    } else {
-                        vec.set_null(batch_idx, true);
-                    }
-                }
-            }
-
-            table::table_append_state state(resource_);
-            table_->append_lock(state);
-            table_->initialize_append(state);
-            table_->append(batch_chunk, state);
-            table_->finalize_append(state);
-
-            for (size_t batch_idx = 0; batch_idx < batch_count; ++batch_idx) {
-                const auto& [id, doc] = documents[batch_start + batch_idx];
-                id_to_row_[id] = next_row_id_++;
-            }
-        }
-    }
-
     vector::data_chunk_t document_table_storage_t::prepare_insert(
         const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents) {
 
@@ -578,7 +356,6 @@ namespace components::document_table {
                 for (size_t col = 0; col < column_count(); ++col) {
                     chunk.data[col].set_null(row, true);
                 }
-                id_to_row_[id] = next_row_id_++;
                 continue;
             }
 
@@ -599,8 +376,6 @@ namespace components::document_table {
                     vec.set_value(row, value);
                 }
             }
-
-            id_to_row_[id] = next_row_id_++;
         }
 
         return chunk;

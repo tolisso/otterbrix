@@ -3,7 +3,6 @@
 #include "json_path_extractor.hpp"
 #include <functional>
 #include <components/document/document.hpp>
-#include <components/document/document_id.hpp>
 #include <components/table/data_table.hpp>
 #include <components/table/column_definition.hpp>
 #include <components/table/storage/in_memory_block_manager.hpp>
@@ -23,37 +22,15 @@ namespace components::document_table {
         size_t array_index = 0;              // Array index
     };
 
-    // Hash function for document_id_t
-    struct document_id_hash_t {
-        std::size_t operator()(const document::document_id_t& id) const {
-            return std::hash<std::string_view>{}(std::string_view(reinterpret_cast<const char*>(id.data()), id.size));
-        }
-    };
-
     class document_table_storage_t {
     public:
         explicit document_table_storage_t(std::pmr::memory_resource* resource,
                                           table::storage::block_manager_t& block_manager);
 
-        // Insert document
-        void insert(const document::document_id_t& id, const document::document_ptr& doc);
-
-        // Batch insert documents
-        void batch_insert(const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents);
-
-        // Prepare insert: evolve schema + convert documents to data_chunk + update id_to_row.
-        // Does NOT append to data_table (caller should do table()->append()).
+        // Prepare insert: evolve schema + convert documents to data_chunk.
+        // Does NOT append to data_table (executor does table()->append() via operator_insert).
         vector::data_chunk_t prepare_insert(
             const std::pmr::vector<std::pair<document::document_id_t, document::document_ptr>>& documents);
-
-        // Get document by ID
-        document::document_ptr get(const document::document_id_t& id);
-
-        // Remove document
-        void remove(const document::document_id_t& id);
-
-        // Check existence
-        bool contains(const document::document_id_t& id) const;
 
         // Scan table
         void scan(vector::data_chunk_t& output, table::table_scan_state& state);
@@ -63,7 +40,7 @@ namespace components::document_table {
                              const std::vector<table::storage_index_t>& column_ids,
                              const table::table_filter_t* filter = nullptr);
 
-        // Column management (replaces dynamic_schema)
+        // Column management
         bool has_column(const std::string& json_path) const;
         const column_info_t* get_column_info(const std::string& json_path) const;
         const column_info_t* get_column_by_index(size_t index) const;
@@ -73,39 +50,26 @@ namespace components::document_table {
         json_path_extractor_t& extractor() { return *extractor_; }
         const json_path_extractor_t& extractor() const { return *extractor_; }
 
-        // Access to table
+        // Access to underlying data table
         table::data_table_t* table() { return table_.get(); }
         const table::data_table_t* table() const { return table_.get(); }
 
         // Evolve schema from data_chunk column types (for SQL INSERT VALUES path)
         void evolve_schema_from_types(const std::pmr::vector<types::complex_logical_type>& types);
 
-        // Document count
-        size_t size() const { return id_to_row_.size(); }
-
-        // Get row_id by document_id
-        bool get_row_id(const document::document_id_t& id, size_t& row_id) const;
+        // Row count
+        size_t size() const { return table_ ? table_->row_group()->total_rows() : 0; }
 
     private:
-        // Add new column
         void add_column(const std::string& json_path,
                         const types::complex_logical_type& type,
                         bool is_array_element = false,
                         size_t array_index = 0);
 
-        // Evolve schema from document - adds new columns
         std::pmr::vector<column_info_t> evolve_from_document(const document::document_ptr& doc);
-
-        // Evolve schema (incremental column addition)
         void evolve_schema(const std::pmr::vector<column_info_t>& new_columns);
-
-        // Convert document to row
         vector::data_chunk_t document_to_row(const document::document_ptr& doc);
 
-        // Convert row back to document
-        document::document_ptr row_to_document(const vector::data_chunk_t& row, size_t row_idx);
-
-        // Helper methods
         types::logical_value_t extract_value_from_document(const document::document_ptr& doc,
                                                            const std::string& json_path,
                                                            types::logical_type expected_type);
@@ -119,23 +83,10 @@ namespace components::document_table {
         std::pmr::memory_resource* resource_;
         table::storage::block_manager_t& block_manager_;
 
-        // Column storage (inlined from dynamic_schema)
         std::pmr::vector<column_info_t> columns_;
         std::pmr::unordered_map<std::string, size_t> path_to_index_;
         std::unique_ptr<json_path_extractor_t> extractor_;
-
-        // Data table
         std::unique_ptr<table::data_table_t> table_;
-
-        // Document ID -> row ID mapping
-        std::pmr::unordered_map<document::document_id_t,
-                                size_t,
-                                document_id_hash_t,
-                                std::equal_to<document::document_id_t>>
-            id_to_row_;
-
-        // Next row ID
-        size_t next_row_id_;
     };
 
 } // namespace components::document_table

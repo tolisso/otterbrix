@@ -102,7 +102,6 @@ namespace services::collection {
             : resource_(resource)
             , document_storage_(resource_)
             , table_storage_(resource_)
-            , document_table_storage_(resource_)
             , index_engine_(core::pmr::make_unique<components::index::index_engine_t>(resource_))
             , name_(name)
             , mdisk_(mdisk)
@@ -121,7 +120,6 @@ namespace services::collection {
             : resource_(resource)
             , document_storage_(resource_)
             , table_storage_(resource_, std::move(columns))
-            , document_table_storage_(resource_)
             , index_engine_(core::pmr::make_unique<components::index::index_engine_t>(resource_))
             , name_(name)
             , mdisk_(mdisk)
@@ -140,7 +138,7 @@ namespace services::collection {
             : resource_(resource)
             , document_storage_(resource_)
             , table_storage_(resource_)
-            , document_table_storage_(resource_)
+            , document_table_storage_(std::make_unique<document_table_storage_wrapper_t>(resource_))
             , index_engine_(core::pmr::make_unique<components::index::index_engine_t>(resource_))
             , name_(name)
             , mdisk_(mdisk)
@@ -155,14 +153,14 @@ namespace services::collection {
         // Accessors for different storage types
         document_storage_t& document_storage() noexcept { return document_storage_; }
         table_storage_t& table_storage() noexcept { return table_storage_; }
-        document_table_storage_wrapper_t& document_table_storage() noexcept { return document_table_storage_; }
+        document_table_storage_wrapper_t& document_table_storage() noexcept { return *document_table_storage_; }
 
         storage_type_t storage_type() const noexcept { return storage_type_; }
 
         // Unified data_table access for TABLE_COLUMNS (both fixed and dynamic schema)
         components::table::data_table_t& data_table() {
             if (has_dynamic_schema_)
-                return *document_table_storage_.storage().table();
+                return *document_table_storage_->storage().table();
             return table_storage_.table();
         }
 
@@ -196,7 +194,7 @@ namespace services::collection {
         std::pmr::memory_resource* resource_;
         document_storage_t document_storage_;
         table_storage_t table_storage_;
-        document_table_storage_wrapper_t document_table_storage_;
+        std::unique_ptr<document_table_storage_wrapper_t> document_table_storage_;
         components::index::index_engine_ptr index_engine_;
 
         collection_full_name_t name_;

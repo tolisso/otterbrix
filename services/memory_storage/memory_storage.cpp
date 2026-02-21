@@ -243,8 +243,9 @@ namespace services {
 
         auto storage_format = create_collection_plan->storage_format();
 
-        // If storage format is explicitly set to document_table (dynamic schema)
-        if (storage_format == components::catalog::used_format_t::document_table) {
+        // columns format with empty schema = dynamic schema table (formerly document_table)
+        if (storage_format == components::catalog::used_format_t::columns &&
+            create_collection_plan->schema().empty()) {
             collections_.emplace(logical_plan->collection_full_name(),
                                  new collection::context_collection_t(resource(),
                                                                       logical_plan->collection_full_name(),
@@ -252,7 +253,7 @@ namespace services {
                                                                       manager_disk_,
                                                                       log_.clone()));
         }
-        // If schema is provided and storage not explicitly set, use columnar
+        // If schema is provided, use static columnar storage
         else if (!create_collection_plan->schema().empty()) {
             std::vector<components::table::column_definition_t> columns;
             columns.reserve(create_collection_plan->schema().size());

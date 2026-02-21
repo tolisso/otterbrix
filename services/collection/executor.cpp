@@ -124,7 +124,39 @@ namespace services::collection::executor {
                             data_node->set_data_chunk(std::move(chunk));
                         } else {
                             // SQL VALUES INSERT: evolve schema for any new columns
-                            storage.evolve_schema_from_types(data_node->data_chunk().types());
+                            auto& insert_chunk = data_node->data_chunk();
+                            storage.evolve_schema_from_types(insert_chunk.types());
+
+                            // Pad chunk to full table schema (NULL for columns not in INSERT)
+                            const size_t table_col_count = storage.column_count();
+                            if (insert_chunk.column_count() < table_col_count) {
+                                auto chunk_types = insert_chunk.types();
+                                auto table_types = storage.table()->copy_types();
+                                const uint64_t row_count = insert_chunk.size();
+                                const uint64_t cap = insert_chunk.capacity();
+
+                                components::vector::data_chunk_t padded(resource(), table_types, cap);
+                                padded.set_cardinality(row_count);
+
+                                for (size_t i = 0; i < table_col_count; ++i) {
+                                    const auto* col_info = storage.get_column_by_index(i);
+                                    size_t chunk_col = SIZE_MAX;
+                                    for (size_t j = 0; j < chunk_types.size(); ++j) {
+                                        if (chunk_types[j].alias() == col_info->json_path) {
+                                            chunk_col = j;
+                                            break;
+                                        }
+                                    }
+                                    if (chunk_col != SIZE_MAX) {
+                                        padded.data[i] = insert_chunk.data[chunk_col];
+                                    } else {
+                                        for (uint64_t row = 0; row < row_count; ++row) {
+                                            padded.data[i].set_null(row, true);
+                                        }
+                                    }
+                                }
+                                data_node->set_data_chunk(std::move(padded));
+                            }
                         }
                         break;
                     }

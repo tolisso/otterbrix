@@ -31,7 +31,8 @@ namespace components::sql::transform {
                 if (std::string(def_elem->defname) == "storage") {
                     auto storage_value = strVal(def_elem->arg);
                     if (std::strcmp(storage_value, "document_table") == 0) {
-                        storage_format = components::catalog::used_format_t::document_table;
+                        // document_table is now stored as dynamic-schema columns table
+                        storage_format = components::catalog::used_format_t::columns;
                     } else if (std::strcmp(storage_value, "documents") == 0) {
                         storage_format = components::catalog::used_format_t::documents;
                     } else if (std::strcmp(storage_value, "columns") == 0) {
@@ -44,9 +45,9 @@ namespace components::sql::transform {
         }
 
         if (columns.empty()) {
-            // For schema-less tables, default to document_table format if not explicitly specified
+            // For schema-less tables, default to columns (dynamic schema) if not explicitly specified
             auto effective_format = (storage_format == components::catalog::used_format_t::undefined)
-                                        ? components::catalog::used_format_t::document_table
+                                        ? components::catalog::used_format_t::columns
                                         : storage_format;
             return logical_plan::make_node_create_collection(resource_,
                                                             rangevar_to_collection(node.relation),

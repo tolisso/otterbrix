@@ -21,7 +21,7 @@ create_context(std::pmr::memory_resource* resource, const std::string& name) {
     return std::make_unique<services::collection::context_collection_t>(
         resource,
         collection_name,
-        services::collection::storage_type_t::DOCUMENT_TABLE,
+        true, // dynamic_schema
         dummy_address,
         log
     );
