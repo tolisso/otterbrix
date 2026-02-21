@@ -59,8 +59,10 @@ namespace components::catalog {
             const auto& info = namespaces_.get_namespace_info(id.get_namespace()).computing;
             auto it = info.find(id.table_name());
             if (it != info.end()) {
-                // Возвращаем сохранённый формат вместо хардкода documents
-                return it->second.storage_format();
+                auto fmt = it->second.storage_format();
+                // Normalize document_table → columns (both use columnar storage internally)
+                if (fmt == used_format_t::document_table) return used_format_t::columns;
+                return fmt;
             }
         }
 

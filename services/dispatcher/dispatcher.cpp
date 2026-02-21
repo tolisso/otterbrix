@@ -315,15 +315,13 @@ namespace services::dispatcher {
                     error = std::move(check_result);
                 } else {
                     // Получаем реальный формат из catalog, а не полагаемся на uses_table_data()
-                    // которая не различает columns и document_table
                     if (!logic_plan->collection_full_name().empty()) {
                         table_id tid(resource(), logic_plan->collection_full_name());
                         used_format = catalog_.get_table_format(tid);
 
-                        // Pre-execution catalog update for document_table INSERT
-                        if (used_format == used_format_t::document_table &&
-                            logic_plan->type() == node_type::insert_t &&
-                            catalog_.table_computes(tid)) {
+                        // Pre-execution catalog update for dynamic-schema (computing) table INSERT
+                        if (catalog_.table_computes(tid) &&
+                            logic_plan->type() == node_type::insert_t) {
                             auto& comp_sch = catalog_.get_computing_table_schema(tid);
                             std::string type_error;
 
@@ -688,6 +686,7 @@ namespace services::dispatcher {
     components::cursor::cursor_t_ptr
     dispatcher_t::check_collections_format_(components::logical_plan::node_ptr& logical_plan) const {
         used_format_t used_format = used_format_t::undefined;
+        bool has_computing_collection = false;
         cursor_t_ptr result = make_cursor(resource(), operation_status_t::success);
         auto check_format = [&](components::logical_plan::node_t* node) {
             used_format_t check = used_format_t::undefined;
@@ -696,6 +695,9 @@ namespace services::dispatcher {
                 table_id id(resource(), node->collection_full_name());
                 if (auto res = check_collection_exists(id); !res) {
                     check = catalog_.get_table_format(id);
+                    if (catalog_.table_computes(id)) {
+                        has_computing_collection = true;
+                    }
                 } else {
                     result = res;
                     return false;
@@ -707,8 +709,7 @@ namespace services::dispatcher {
                 if (check == used_format_t::undefined) {
                     check = static_cast<used_format_t>(data_node->uses_data_chunk());
                 } else {
-                    // Both columns and document_table use data chunks, so they're compatible
-                    bool check_uses_chunks = (check == used_format_t::columns || check == used_format_t::document_table);
+                    bool check_uses_chunks = (check == used_format_t::columns);
                     bool data_uses_chunks = data_node->uses_data_chunk();
 
                     if (check_uses_chunks != data_uses_chunks) {
@@ -785,15 +786,11 @@ namespace services::dispatcher {
                 return true;
             }
 
-            // Allow compatibility between columns and document_table (both use data chunks)
-            bool used_is_chunk = (used_format == used_format_t::columns || used_format == used_format_t::document_table);
-            bool check_is_chunk = (check == used_format_t::columns || check == used_format_t::document_table);
-            if (used_is_chunk && check_is_chunk) {
-                return true;
-            }
 
-            // Allow documents to be inserted into document_table (physical plan will handle conversion)
-            if (used_format == used_format_t::document_table && check == used_format_t::documents) {
+            // Allow documents to be inserted into dynamic-schema (computing) columns tables.
+            // Executor will handle the documents → data_chunk conversion.
+            if (used_format == used_format_t::columns && check == used_format_t::documents
+                && has_computing_collection) {
                 return true;
             }
 
@@ -822,9 +819,6 @@ namespace services::dispatcher {
             case used_format_t::documents:
                 return make_cursor(resource(), std::pmr::vector<components::document::document_ptr>{resource()});
             case used_format_t::columns:
-                return make_cursor(resource(), components::vector::data_chunk_t{resource(), {}, 0});
-            case used_format_t::document_table:
-                // document_table также использует data_chunk, но нуждается в специальных операторах
                 return make_cursor(resource(), components::vector::data_chunk_t{resource(), {}, 0});
             case used_format_t::undefined:
             default:
@@ -883,9 +877,9 @@ namespace services::dispatcher {
                     break;
                 }
 
-                // Skip catalog update for document_table - already done in execute_plan with type checking
-                if (catalog_.table_computes(id) &&
-                    catalog_.get_computing_table_schema(id).storage_format() == used_format_t::document_table) {
+                // Skip catalog update for dynamic-schema (computing) tables -
+                // already done in execute_plan with type checking
+                if (catalog_.table_computes(id)) {
                     break;
                 }
 

@@ -1,0 +1,31 @@
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::spaces()
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::manager_wal start
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] manager_wal_replicate_t start thread pool
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::manager_wal finish
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::manager_disk start
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] manager_disk start
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] manager_disk finish
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::manager_disk finish
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::memory_storage start
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] memory_storage start thread pool
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::memory_storage finish
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::manager_dispatcher start
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] manager_dispatcher_t::manager_dispatcher_t 
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::manager_dispatcher finish
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::manager_dispatcher create dispatcher
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] manager_wal_replicate_t::create_wal_worker
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] manager_disk create_agent : agent_disk_1
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] agent_disk::create
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] manager_dispatcher_t::create session: 30117596185 
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] dispatcher_t::dispatcher_t start name:dispatcher_t
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::spaces() final
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] delete spaces
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] delete memory_storage
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] delete wrapper_dispatcher_t
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] delete manager_wal_replicate_t
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] delete wal_replicate_t
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] delete manager_disk_t
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] delete agent_disk_t
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] delete manager_dispatcher_t
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] delete dispatcher_t
+[2026-02-21 00:35:05.715] [__default__] [trace] [pid 9072 tid 9072] spaces::spaces()

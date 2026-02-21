@@ -243,12 +243,12 @@ namespace services {
 
         auto storage_format = create_collection_plan->storage_format();
 
-        // If storage format is explicitly set to document_table
+        // If storage format is explicitly set to document_table (dynamic schema)
         if (storage_format == components::catalog::used_format_t::document_table) {
             collections_.emplace(logical_plan->collection_full_name(),
                                  new collection::context_collection_t(resource(),
                                                                       logical_plan->collection_full_name(),
-                                                                      collection::storage_type_t::DOCUMENT_TABLE,
+                                                                      true, // dynamic_schema
                                                                       manager_disk_,
                                                                       log_.clone()));
         }

@@ -85,8 +85,7 @@ namespace services::collection {
     enum class storage_type_t : uint8_t
     {
         DOCUMENT_BTREE = 0,  // document_storage_ (B-tree)
-        TABLE_COLUMNS = 1,   // table_storage_ (columnar)
-        DOCUMENT_TABLE = 2   // document_table_storage_ (hybrid)
+        TABLE_COLUMNS = 1,   // table_storage_ or document_table_storage_ (columnar)
     };
 
     namespace executor {
@@ -132,10 +131,10 @@ namespace services::collection {
             assert(resource != nullptr);
         }
 
-        // Constructor for DOCUMENT_TABLE (hybrid storage)
+        // Constructor for TABLE_COLUMNS with dynamic schema (formerly DOCUMENT_TABLE)
         explicit context_collection_t(std::pmr::memory_resource* resource,
                                       const collection_full_name_t& name,
-                                      storage_type_t storage_type,
+                                      bool dynamic_schema,
                                       const actor_zeta::address_t& mdisk,
                                       const log_t& log)
             : resource_(resource)
@@ -146,10 +145,11 @@ namespace services::collection {
             , name_(name)
             , mdisk_(mdisk)
             , log_(log)
-            , storage_type_(storage_type)
-            , uses_datatable_(storage_type == storage_type_t::DOCUMENT_TABLE) {
+            , storage_type_(storage_type_t::TABLE_COLUMNS)
+            , uses_datatable_(true)
+            , has_dynamic_schema_(dynamic_schema) {
             assert(resource != nullptr);
-            assert(storage_type == storage_type_t::DOCUMENT_TABLE);
+            assert(dynamic_schema);
         }
 
         // Accessors for different storage types
@@ -159,12 +159,14 @@ namespace services::collection {
 
         storage_type_t storage_type() const noexcept { return storage_type_; }
 
-        // Unified data_table access for both TABLE_COLUMNS and DOCUMENT_TABLE
+        // Unified data_table access for TABLE_COLUMNS (both fixed and dynamic schema)
         components::table::data_table_t& data_table() {
-            if (storage_type_ == storage_type_t::DOCUMENT_TABLE)
+            if (has_dynamic_schema_)
                 return *document_table_storage_.storage().table();
             return table_storage_.table();
         }
+
+        bool has_dynamic_schema() const noexcept { return has_dynamic_schema_; }
 
         components::index::index_engine_ptr& index_engine() noexcept { return index_engine_; }
 
@@ -207,6 +209,7 @@ namespace services::collection {
 
         storage_type_t storage_type_;
         bool uses_datatable_;
+        bool has_dynamic_schema_{false};
         bool dropped_{false};
     };
 

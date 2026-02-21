@@ -94,15 +94,14 @@ namespace services::collection::executor {
 
         // Preprocessing: convert document_table INSERT documents → data_chunk
         // so we can route through the standard table planner
-        if (data_format == components::catalog::used_format_t::document_table &&
-            logical_plan->type() == components::logical_plan::node_type::insert_t) {
-            // Find node_data_t in children
-            for (auto& child : logical_plan->children()) {
-                if (child->type() == components::logical_plan::node_type::data_t) {
-                    auto* data_node = static_cast<components::logical_plan::node_data_t*>(child.get());
-                    auto it = context_storage.find(logical_plan->collection_full_name());
-                    if (it != context_storage.end() &&
-                        it->second->storage_type() == storage_type_t::DOCUMENT_TABLE) {
+        if (logical_plan->type() == components::logical_plan::node_type::insert_t) {
+            auto it = context_storage.find(logical_plan->collection_full_name());
+            if (it != context_storage.end() &&
+                it->second->has_dynamic_schema()) {
+                // Find node_data_t in children
+                for (auto& child : logical_plan->children()) {
+                    if (child->type() == components::logical_plan::node_type::data_t) {
+                        auto* data_node = static_cast<components::logical_plan::node_data_t*>(child.get());
                         auto& storage = it->second->document_table_storage().storage();
 
                         if (data_node->uses_documents()) {
@@ -123,26 +122,14 @@ namespace services::collection::executor {
 
                             // Replace documents with data_chunk in logical plan
                             data_node->set_data_chunk(std::move(chunk));
-
-                            // Route through table planner
-                            data_format = components::catalog::used_format_t::columns;
                         } else {
                             // SQL VALUES INSERT: evolve schema for any new columns
                             storage.evolve_schema_from_types(data_node->data_chunk().types());
-                            // data_format will be changed to columns by the block below
                         }
+                        break;
                     }
-                    break;
                 }
             }
-        }
-
-        // document_table routes through table planner for all operations.
-        // INSERT was preprocessed above (documents → data_chunk, format set to columns).
-        // SELECT/DELETE/UPDATE go directly to table planner since table operators
-        // now have columnar_group (fast GROUP BY) and projection-aware full_scan.
-        if (data_format == components::catalog::used_format_t::document_table) {
-            data_format = components::catalog::used_format_t::columns;
         }
 
         // TODO: this does not handle cross documents/columns operations
@@ -481,7 +468,7 @@ namespace services::collection::executor {
         } else {
             trace(log_, "executor::insert_document_impl: Using data_chunk path");
             // For document_table, use the output data_chunk directly since it already contains the inserted data
-            if (collection->storage_type() == storage_type_t::DOCUMENT_TABLE && plan->output() && plan->output()->uses_data_chunk()) {
+            if (collection->has_dynamic_schema() && plan->output() && plan->output()->uses_data_chunk()) {
                 trace(log_, "executor::insert_document_impl: DOCUMENT_TABLE branch, output size={}", plan->output()->size());
                 // Get reference to the output chunk
                 auto& output_chunk = plan->output()->data_chunk();
