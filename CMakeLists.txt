@@ -176,6 +176,10 @@ if(EXAMPLE)
     add_subdirectory(example)
 endif()
 
+if (DEV_MODE)
+    add_subdirectory(tmp_tests)
+endif()
+
 
 
 #set(CPACK_GENERATOR "DEB")

@@ -16,6 +16,7 @@ set(SOURCE_${PROJECT_NAME}
         collection.cpp
         data_table.cpp
         row_version_manager.cpp
+        insert_jsons.cpp
 
         storage/file_buffer.cpp
         storage/block_handle.cpp
@@ -40,6 +41,7 @@ target_link_libraries(
         otterbrix::file
         otterbrix::types
         otterbrix::vector
+        otterbrix::document
         magic_enum::magic_enum
         msgpackc-cxx
 )

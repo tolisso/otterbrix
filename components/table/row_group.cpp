@@ -125,10 +125,17 @@ namespace components::table {
         if (rows_to_write > 0) {
             column_append_state state;
             added_column->initialize_append(state);
+            const bool null_default = default_value.is_null();
             for (uint64_t i = 0; i < rows_to_write; i += vector::DEFAULT_VECTOR_CAPACITY) {
                 uint64_t rows_in_this_vector = std::min<uint64_t>(rows_to_write - i, vector::DEFAULT_VECTOR_CAPACITY);
-                assert(result.type() == default_value.type());
-                result.reference(default_value);
+                if (null_default) {
+                    for (uint64_t r = 0; r < rows_in_this_vector; ++r) {
+                        result.validity().set_invalid(r);
+                    }
+                } else {
+                    assert(result.type() == default_value.type());
+                    result.reference(default_value);
+                }
                 added_column->append(state, result, rows_in_this_vector);
             }
         }

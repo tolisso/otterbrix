@@ -150,7 +150,9 @@ namespace components::table {
     uint64_t collection_t::calculate_size() {
         uint64_t res = 0;
         auto row_group = row_groups_->root_segment();
-        assert(row_group);
+        if (!row_group) {
+            return 0;
+        }
         while (row_group) {
             res += row_group->calculate_size();
             row_group = row_groups_->next_segment(row_group);
