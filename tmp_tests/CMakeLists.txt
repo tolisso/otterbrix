@@ -2,11 +2,15 @@ project(tmp_test_insert_large CXX)
 
 set(${PROJECT_NAME}_SOURCES
         test_insert_large.cpp
+        test_jsonbench.cpp
 )
 
 add_executable(${PROJECT_NAME} main.cpp ${${PROJECT_NAME}_SOURCES})
 
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/integration/cpp/test
+)
 
 # Path to the sample JSON file (relative to the project source root).
 target_compile_definitions(${PROJECT_NAME} PRIVATE
@@ -23,6 +27,25 @@ target_link_libraries(
         otterbrix::vector
         Catch2::Catch2
         magic_enum::magic_enum
+        cpp_otterbrix
+        otterbrix::log
+        otterbrix::memory_storage
+        otterbrix::collection
+        otterbrix::cursor
+        otterbrix::session
+        otterbrix::dispatcher
+        otterbrix::wal
+        otterbrix::disk
+        otterbrix::locks
+        spdlog::spdlog
+        msgpackc-cxx
+        absl::crc32c
+        absl::int128
+        actor-zeta::actor-zeta
+        Boost::boost
+        fmt::fmt
+        ZLIB::ZLIB
+        BZip2::BZip2
 )
 
 include(CTest)
