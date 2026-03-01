@@ -3,6 +3,8 @@ project(collection)
 set(${PROJECT_NAME}_SOURCES
         create_index.cpp
         executor.cpp
+        table_storage.cpp
+        json_path_extractor.cpp
 )
 
 add_library(otterbrix_${PROJECT_NAME}
@@ -18,7 +20,6 @@ target_link_libraries(
         otterbrix_${PROJECT_NAME} PUBLIC
         otterbrix::table
         otterbrix::document
-        otterbrix::document_table
         otterbrix::types
         otterbrix::cursor
         otterbrix::session

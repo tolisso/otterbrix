@@ -3,44 +3,36 @@
 #include <components/document/container/json_object.hpp>
 #include <stdexcept>
 
-namespace components::document_table {
+namespace services::collection {
 
     json_path_extractor_t::json_path_extractor_t(std::pmr::memory_resource* resource)
         : resource_(resource) {}
 
-    std::pmr::vector<extracted_path_t> json_path_extractor_t::extract_paths(const document::document_ptr& doc) {
+    std::pmr::vector<extracted_path_t> json_path_extractor_t::extract_paths(const components::document::document_ptr& doc) {
         std::pmr::vector<extracted_path_t> result(resource_);
 
         if (!doc || !doc->is_valid()) {
             return result;
         }
 
-        // Получаем корневой узел JSON trie
         const auto* root = doc->json_trie().get();
-
-        // Рекурсивно извлекаем все пути
         extract_recursive(root, "", 0, result);
-
         return result;
     }
 
-    std::pmr::vector<std::string> json_path_extractor_t::extract_field_names(const document::document_ptr& doc) {
+    std::pmr::vector<std::string> json_path_extractor_t::extract_field_names(const components::document::document_ptr& doc) {
         std::pmr::vector<std::string> result(resource_);
 
         if (!doc || !doc->is_valid()) {
             return result;
         }
 
-        // Получаем корневой узел JSON trie
         const auto* root = doc->json_trie().get();
-
-        // Рекурсивно извлекаем только имена полей (без типов)
         extract_field_names_recursive(root, "", 0, result);
-
         return result;
     }
 
-    void json_path_extractor_t::extract_recursive(const document::json::json_trie_node* node,
+    void json_path_extractor_t::extract_recursive(const components::document::json::json_trie_node* node,
                                                    const std::string& current_path,
                                                    size_t depth,
                                                    std::pmr::vector<extracted_path_t>& result) {
@@ -48,16 +40,13 @@ namespace components::document_table {
             return;
         }
 
-        // Проверка максимальной глубины
         if (depth >= config_.max_nesting_depth) {
             return;
         }
 
         if (node->is_object()) {
-            // Объект: проходим по всем полям
             const auto* obj = node->get_object();
             for (const auto& [key_node, value_node] : *obj) {
-                // Извлекаем имя поля из ключа
                 std::string field_name;
                 if (key_node->is_mut()) {
                     const auto* elem = key_node->get_mut();
@@ -70,19 +59,17 @@ namespace components::document_table {
                 }
 
                 if (field_name.empty()) {
-                    continue; // Пропускаем невалидные ключи
+                    continue;
                 }
 
                 std::string field_path = join_path(current_path, field_name);
                 const auto* child = value_node.get();
 
                 if (child->is_object() || child->is_array()) {
-                    // Рекурсивно обрабатываем вложенные структуры
                     if (config_.extract_nested_objects) {
                         extract_recursive(child, field_path, depth + 1, result);
                     }
                 } else if (child->is_mut()) {
-                    // Скалярное значение - добавляем в результат
                     const auto* elem = child->get_mut();
                     result.push_back(extracted_path_t{
                         .path = field_path,
@@ -94,18 +81,11 @@ namespace components::document_table {
             }
 
         } else if (node->is_array()) {
-            // Массив: обрабатываем элементы
             const auto* arr = node->get_array();
 
             if (config_.use_separate_array_table) {
-                // Вариант 1: Массивы в отдельной таблице
-                // TODO: добавить в array_storage
-                // Пока пропускаем
-
+                // skip
             } else if (config_.flatten_arrays) {
-                // Вариант 2: Разворачиваем в колонки array[0], array[1], ...
-
-                // Проверяем размер массива
                 if (arr->size() > config_.max_array_size) {
                     throw std::runtime_error(
                         "Array size exceeded limit for path '" + current_path + "': " +
@@ -114,18 +94,15 @@ namespace components::document_table {
                 }
 
                 size_t max_index = arr->size();
-
                 for (size_t i = 0; i < max_index; ++i) {
                     const auto* elem_node = arr->get(i);
                     if (!elem_node) {
                         continue;
                     }
 
-                    // Use safe name: "field_arr0_", "field_arr1_" instead of "field[0]", "field[1]"
                     std::string array_path = current_path + "_arr" + std::to_string(i) + "_";
 
                     if (elem_node->is_object() || elem_node->is_array()) {
-                        // Вложенная структура в массиве
                         extract_recursive(elem_node, array_path, depth + 1, result);
                     } else if (elem_node->is_mut()) {
                         const auto* elem = elem_node->get_mut();
@@ -138,17 +115,15 @@ namespace components::document_table {
                     }
                 }
             } else {
-                // Вариант 3: Массив как JSON строка
                 result.push_back(extracted_path_t{
                     .path = current_path,
-                    .type = types::logical_type::STRING_LITERAL,
+                    .type = components::types::logical_type::STRING_LITERAL,
                     .is_array = true,
                     .array_index = 0,
                     .is_nullable = true});
             }
 
         } else if (node->is_mut()) {
-            // Скалярное значение на корневом уровне
             const auto* elem = node->get_mut();
             result.push_back(extracted_path_t{
                 .path = current_path.empty() ? "$root" : current_path,
@@ -159,53 +134,28 @@ namespace components::document_table {
         }
     }
 
-    types::logical_type json_path_extractor_t::infer_type(const document::impl::element* elem) const {
+    components::types::logical_type json_path_extractor_t::infer_type(const components::document::impl::element* elem) const {
         if (!elem || elem->is_null()) {
-            return types::logical_type::STRING_LITERAL; // NULL как VARCHAR fallback
+            return components::types::logical_type::STRING_LITERAL;
         }
-
-        if (elem->is_bool()) {
-            return types::logical_type::BOOLEAN;
-        }
-
-        if (elem->is_int64()) {
-            return types::logical_type::BIGINT;
-        }
-
-        if (elem->is_uint64()) {
-            return types::logical_type::UBIGINT;
-        }
-
-        if (elem->is_int32()) {
-            return types::logical_type::INTEGER;
-        }
-
-        if (elem->is_double()) {
-            return types::logical_type::DOUBLE;
-        }
-
-        if (elem->is_float()) {
-            return types::logical_type::FLOAT;
-        }
-
-        if (elem->is_string()) {
-            return types::logical_type::STRING_LITERAL;
-        }
-
-        // По умолчанию - строка
-        return types::logical_type::STRING_LITERAL;
+        if (elem->is_bool()) return components::types::logical_type::BOOLEAN;
+        if (elem->is_int64()) return components::types::logical_type::BIGINT;
+        if (elem->is_uint64()) return components::types::logical_type::UBIGINT;
+        if (elem->is_int32()) return components::types::logical_type::INTEGER;
+        if (elem->is_double()) return components::types::logical_type::DOUBLE;
+        if (elem->is_float()) return components::types::logical_type::FLOAT;
+        if (elem->is_string()) return components::types::logical_type::STRING_LITERAL;
+        return components::types::logical_type::STRING_LITERAL;
     }
 
     std::string json_path_extractor_t::join_path(const std::string& parent, const std::string& child) const {
         if (parent.empty()) {
             return child;
         }
-        // Use "_dot_" instead of "." to make SQL-safe column names
-        // Example: "commit_dot_operation" instead of "commit.operation"
         return parent + "_dot_" + child;
     }
 
-    void json_path_extractor_t::extract_field_names_recursive(const document::json::json_trie_node* node,
+    void json_path_extractor_t::extract_field_names_recursive(const components::document::json::json_trie_node* node,
                                                                const std::string& current_path,
                                                                size_t depth,
                                                                std::pmr::vector<std::string>& result) {
@@ -213,16 +163,13 @@ namespace components::document_table {
             return;
         }
 
-        // Проверка максимальной глубины
         if (depth >= config_.max_nesting_depth) {
             return;
         }
 
         if (node->is_object()) {
-            // Объект: проходим по всем полям
             const auto* obj = node->get_object();
             for (const auto& [key_node, value_node] : *obj) {
-                // Извлекаем имя поля из ключа
                 std::string field_name;
                 if (key_node->is_mut()) {
                     const auto* elem = key_node->get_mut();
@@ -235,25 +182,22 @@ namespace components::document_table {
                 }
 
                 if (field_name.empty()) {
-                    continue; // Пропускаем невалидные ключи
+                    continue;
                 }
 
                 std::string field_path = join_path(current_path, field_name);
                 const auto* child = value_node.get();
 
                 if (child->is_object() || child->is_array()) {
-                    // Рекурсивно обрабатываем вложенные структуры
                     if (config_.extract_nested_objects) {
                         extract_field_names_recursive(child, field_path, depth + 1, result);
                     }
                 } else if (child->is_mut()) {
-                    // Скалярное значение - добавляем путь (БЕЗ типа!)
                     result.push_back(field_path);
                 }
             }
 
         } else if (node->is_array()) {
-            // Массив: обрабатываем элементы если flatten_arrays включен
             if (!config_.flatten_arrays) {
                 return;
             }
@@ -263,21 +207,17 @@ namespace components::document_table {
 
             for (size_t i = 0; i < array_size; ++i) {
                 const auto* elem = arr->get(i);
-
-                // Формируем путь с индексом массива: parent_arr0, parent_arr1, ...
                 std::string array_path = current_path + "_arr" + std::to_string(i);
 
                 if (elem->is_object() || elem->is_array()) {
-                    // Рекурсивно обрабатываем вложенные структуры
                     if (config_.extract_nested_objects) {
                         extract_field_names_recursive(elem, array_path, depth + 1, result);
                     }
                 } else if (elem->is_mut()) {
-                    // Скалярное значение - добавляем путь
                     result.push_back(array_path);
                 }
             }
         }
     }
 
-} // namespace components::document_table
+} // namespace services::collection

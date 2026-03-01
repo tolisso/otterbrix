@@ -12,7 +12,7 @@ static const database_name_t database_name = "bluesky_bench";
 static const collection_name_t collection_name = "bluesky";
 
 // Number of documents to use from the dataset (max 100000)
-static constexpr size_t DOC_LIMIT = 1000;
+static constexpr size_t DOC_LIMIT = 100000;
 
 // Set to true to also benchmark document (B-tree) storage
 static constexpr bool TEST_DOCUMENT_STORAGE = true;

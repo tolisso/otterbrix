@@ -102,7 +102,7 @@ namespace services::collection::executor {
                 for (auto& child : logical_plan->children()) {
                     if (child->type() == components::logical_plan::node_type::data_t) {
                         auto* data_node = static_cast<components::logical_plan::node_data_t*>(child.get());
-                        auto& storage = it->second->document_table_storage().storage();
+                        auto& storage = it->second->table_storage();
 
                         if (data_node->uses_documents()) {
                             // API insert: schema evolution + convert documents → data_chunk + id_to_row update
@@ -131,7 +131,7 @@ namespace services::collection::executor {
                             const size_t table_col_count = storage.column_count();
                             if (insert_chunk.column_count() < table_col_count) {
                                 auto chunk_types = insert_chunk.types();
-                                auto table_types = storage.table()->copy_types();
+                                auto table_types = storage.table().copy_types();
                                 const uint64_t row_count = insert_chunk.size();
                                 const uint64_t cap = insert_chunk.capacity();
 
