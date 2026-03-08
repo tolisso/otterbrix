@@ -128,8 +128,8 @@ namespace services::collection::executor {
                             storage.evolve_schema_from_types(insert_chunk.types());
 
                             // Pad chunk to full table schema (NULL for columns not in INSERT)
-                            const size_t table_col_count = storage.column_count();
-                            if (insert_chunk.column_count() < table_col_count) {
+                            const auto& table_cols = storage.table().columns();
+                            if (insert_chunk.column_count() < table_cols.size()) {
                                 auto chunk_types = insert_chunk.types();
                                 auto table_types = storage.table().copy_types();
                                 const uint64_t row_count = insert_chunk.size();
@@ -138,11 +138,11 @@ namespace services::collection::executor {
                                 components::vector::data_chunk_t padded(resource(), table_types, cap);
                                 padded.set_cardinality(row_count);
 
-                                for (size_t i = 0; i < table_col_count; ++i) {
-                                    const auto* col_info = storage.get_column_by_index(i);
+                                for (size_t i = 0; i < table_cols.size(); ++i) {
+                                    const auto& col_name = table_cols[i].name();
                                     size_t chunk_col = SIZE_MAX;
                                     for (size_t j = 0; j < chunk_types.size(); ++j) {
-                                        if (chunk_types[j].alias() == col_info->json_path) {
+                                        if (chunk_types[j].alias() == col_name) {
                                             chunk_col = j;
                                             break;
                                         }

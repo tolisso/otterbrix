@@ -39,15 +39,6 @@ namespace services::collection {
     using document_storage_t = core::pmr::btree::btree_t<document_id_t, document_ptr>;
     using cursor_storage_t = std::pmr::unordered_map<session_id_t, components::cursor::cursor_t>;
 
-    // Column info for dynamic schema tables
-    struct column_info_t {
-        std::string json_path;
-        components::types::complex_logical_type type;
-        size_t column_index = 0;
-        bool is_array_element = false;
-        size_t array_index = 0;
-    };
-
     class table_storage_t {
     public:
         // Fixed schema (empty)
@@ -60,7 +51,6 @@ namespace services::collection {
                   resource,
                   block_manager_,
                   std::vector<components::table::column_definition_t>{}))
-            , columns_(resource)
             , path_to_index_(resource) {}
 
         // Fixed schema (with columns)
@@ -74,7 +64,6 @@ namespace services::collection {
                   resource,
                   block_manager_,
                   std::move(columns)))
-            , columns_(resource)
             , path_to_index_(resource) {}
 
         // Dynamic schema (schema evolves on insert)
@@ -87,7 +76,6 @@ namespace services::collection {
                   resource,
                   block_manager_,
                   std::vector<components::table::column_definition_t>{}))
-            , columns_(resource)
             , path_to_index_(resource)
             , has_dynamic_schema_(true)
             , extractor_(std::make_unique<json_path_extractor_t>(resource)) {}
@@ -97,13 +85,8 @@ namespace services::collection {
 
         bool has_dynamic_schema() const noexcept { return has_dynamic_schema_; }
 
-        // Dynamic schema column accessors
-        bool has_column(const std::string& json_path) const;
-        const column_info_t* get_column_info(const std::string& json_path) const;
-        const column_info_t* get_column_by_index(size_t index) const;
-        const std::pmr::vector<column_info_t>& columns() const { return columns_; }
-        size_t column_count() const { return columns_.size(); }
-        std::vector<components::table::column_definition_t> to_column_definitions() const;
+        bool has_column(const std::string& name) const;
+        size_t column_count() const { return table_ ? table_->column_count() : 0; }
 
         // Evolve schema from SQL INSERT VALUES types
         void evolve_schema_from_types(const std::pmr::vector<components::types::complex_logical_type>& types);
@@ -115,13 +98,8 @@ namespace services::collection {
         size_t size() const { return table_ ? table_->row_group()->total_rows() : 0; }
 
     private:
-        void add_column(const std::string& json_path,
-                        const components::types::complex_logical_type& type,
-                        bool is_array_element = false,
-                        size_t array_index = 0);
-
-        std::pmr::vector<column_info_t> evolve_from_document(const document_ptr& doc);
-        void evolve_schema(const std::pmr::vector<column_info_t>& new_columns);
+        void add_column(const std::string& name, const components::types::complex_logical_type& type);
+        void evolve_from_document(const document_ptr& doc);
         components::vector::data_chunk_t document_to_row(const document_ptr& doc);
 
         components::types::logical_value_t extract_value_from_document(const document_ptr& doc,
@@ -138,9 +116,7 @@ namespace services::collection {
         components::table::storage::in_memory_block_manager_t block_manager_;
         std::unique_ptr<components::table::data_table_t> table_;
 
-        // Dynamic schema fields (only used when has_dynamic_schema_ = true)
         bool has_dynamic_schema_ = false;
-        std::pmr::vector<column_info_t> columns_;
         std::pmr::unordered_map<std::string, size_t> path_to_index_;
         std::unique_ptr<json_path_extractor_t> extractor_;
     };

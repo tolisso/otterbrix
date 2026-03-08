@@ -37,109 +37,44 @@ namespace {
 
 namespace services::collection {
 
-    bool table_storage_t::has_column(const std::string& json_path) const {
-        return path_to_index_.find(json_path) != path_to_index_.end();
+    bool table_storage_t::has_column(const std::string& name) const {
+        return path_to_index_.find(name) != path_to_index_.end();
     }
 
-    const column_info_t* table_storage_t::get_column_info(const std::string& json_path) const {
-        auto it = path_to_index_.find(json_path);
-        if (it == path_to_index_.end()) {
-            return nullptr;
-        }
-        return &columns_[it->second];
-    }
-
-    const column_info_t* table_storage_t::get_column_by_index(size_t index) const {
-        if (index >= columns_.size()) {
-            return nullptr;
-        }
-        return &columns_[index];
-    }
-
-    std::vector<components::table::column_definition_t> table_storage_t::to_column_definitions() const {
-        std::vector<components::table::column_definition_t> result;
-        result.reserve(columns_.size());
-
-        for (const auto& col : columns_) {
-            auto col_type = col.type;
-            col_type.set_alias(col.json_path);
-            result.emplace_back(col.json_path, std::move(col_type));
-        }
-
-        return result;
-    }
-
-    void table_storage_t::add_column(const std::string& json_path,
-                                     const components::types::complex_logical_type& type,
-                                     bool is_array_element,
-                                     size_t array_index) {
-        if (has_column(json_path)) {
+    void table_storage_t::add_column(const std::string& name,
+                                     const components::types::complex_logical_type& type) {
+        if (has_column(name)) {
             return;
         }
-
-        size_t new_index = columns_.size();
-        column_info_t new_col;
-        new_col.json_path = json_path;
-        new_col.type = type;
-        new_col.column_index = new_index;
-        new_col.is_array_element = is_array_element;
-        new_col.array_index = array_index;
-
-        columns_.push_back(std::move(new_col));
-        path_to_index_[json_path] = new_index;
+        size_t new_index = table_->column_count();
+        auto default_value = std::make_unique<components::types::logical_value_t>(type);
+        components::table::column_definition_t col_def(name, type, std::move(default_value));
+        auto new_table = std::make_unique<components::table::data_table_t>(*table_, col_def);
+        table_ = std::move(new_table);
+        path_to_index_[name] = new_index;
     }
 
-    std::pmr::vector<column_info_t> table_storage_t::evolve_from_document(const document_ptr& doc) {
-        std::pmr::vector<column_info_t> new_columns(resource_);
-
+    void table_storage_t::evolve_from_document(const document_ptr& doc) {
         if (!doc || !doc->is_valid()) {
-            return new_columns;
+            return;
         }
-
-        auto extracted_paths = extractor_->extract_paths(doc);
-
-        for (const auto& path_info : extracted_paths) {
-            if (has_column(path_info.path)) {
-                continue;
+        for (const auto& path_info : extractor_->extract_paths(doc)) {
+            if (!has_column(path_info.path)) {
+                components::types::complex_logical_type col_type(path_info.type);
+                col_type.set_alias(path_info.path);
+                add_column(path_info.path, col_type);
             }
-
-            components::types::complex_logical_type col_type(path_info.type);
-            col_type.set_alias(path_info.path);
-
-            add_column(path_info.path, col_type, path_info.is_array, path_info.array_index);
-            new_columns.push_back(columns_.back());
-        }
-
-        return new_columns;
-    }
-
-    void table_storage_t::evolve_schema(const std::pmr::vector<column_info_t>& new_columns) {
-        for (const auto& col_info : new_columns) {
-            auto default_value = std::make_unique<components::types::logical_value_t>(col_info.type);
-            components::table::column_definition_t new_column_def(col_info.json_path,
-                                                                   col_info.type,
-                                                                   std::move(default_value));
-            auto new_table = std::make_unique<components::table::data_table_t>(*table_, new_column_def);
-            table_ = std::move(new_table);
         }
     }
 
     void table_storage_t::evolve_schema_from_types(
         const std::pmr::vector<components::types::complex_logical_type>& types) {
-        std::pmr::vector<column_info_t> new_columns(resource_);
         for (const auto& col_type : types) {
-            const std::string& col_name = col_type.alias();
-            if (col_name.empty()) {
+            const std::string& name = col_type.alias();
+            if (name.empty() || has_column(name) || has_column("/" + name)) {
                 continue;
             }
-            if (has_column(col_name) || has_column("/" + col_name)) {
-                continue;
-            }
-            add_column(col_name, col_type);
-            new_columns.push_back(columns_.back());
-        }
-        if (!new_columns.empty()) {
-            evolve_schema(new_columns);
+            add_column(name, col_type);
         }
     }
 
@@ -210,25 +145,26 @@ namespace services::collection {
         components::vector::data_chunk_t chunk(resource_, types);
         chunk.set_cardinality(1);
 
-        for (size_t i = 0; i < column_count(); ++i) {
-            const auto* col_info = get_column_by_index(i);
+        const auto& cols = table_->columns();
+        for (size_t i = 0; i < cols.size(); ++i) {
+            const auto& col_name = cols[i].name();
             auto& vec = chunk.data[i];
 
-            if (col_info->json_path == "_id") {
+            if (col_name == "_id") {
                 auto doc_id = components::document::get_document_id(doc);
                 std::string id_str(reinterpret_cast<const char*>(doc_id.data()), doc_id.size);
                 vec.set_value(0, components::types::logical_value_t(id_str));
                 continue;
             }
 
-            std::string doc_path = column_name_to_document_path(col_info->json_path);
+            std::string doc_path = column_name_to_document_path(col_name);
 
             if (!doc->is_exists(doc_path)) {
                 vec.set_null(0, true);
                 continue;
             }
 
-            switch (col_info->type.type()) {
+            switch (cols[i].type().type()) {
             case components::types::logical_type::BOOLEAN:
                 if (doc->is_bool(doc_path)) {
                     vec.set_value(0, components::types::logical_value_t(doc->get_bool(doc_path)));
@@ -297,21 +233,17 @@ namespace services::collection {
 
         // Step 1: Evolve schema from all documents
         for (const auto& [id, doc] : documents) {
-            if (!doc || !doc->is_valid()) {
-                continue;
-            }
-            auto new_columns = evolve_from_document(doc);
-            if (!new_columns.empty()) {
-                evolve_schema(new_columns);
+            if (doc && doc->is_valid()) {
+                evolve_from_document(doc);
             }
         }
 
         // Step 2: Build column path cache
+        const auto& cols = table_->columns();
         std::vector<std::string> doc_paths;
-        doc_paths.reserve(column_count());
-        for (size_t i = 0; i < column_count(); ++i) {
-            const auto* col_info = get_column_by_index(i);
-            doc_paths.emplace_back(column_name_to_document_path(col_info->json_path));
+        doc_paths.reserve(cols.size());
+        for (const auto& col : cols) {
+            doc_paths.emplace_back(column_name_to_document_path(col.name()));
         }
 
         // Step 3: Create one data_chunk for all documents
@@ -324,23 +256,20 @@ namespace services::collection {
             const auto& [id, doc] = documents[row];
 
             if (!doc || !doc->is_valid()) {
-                for (size_t col = 0; col < column_count(); ++col) {
+                for (size_t col = 0; col < cols.size(); ++col) {
                     chunk.data[col].set_null(row, true);
                 }
                 continue;
             }
 
-            for (size_t col = 0; col < column_count(); ++col) {
-                const auto* col_info = get_column_by_index(col);
+            for (size_t col = 0; col < cols.size(); ++col) {
                 auto& vec = chunk.data[col];
-
                 const auto& doc_path = doc_paths[col];
                 if (!doc->is_exists(doc_path)) {
                     vec.set_null(row, true);
                     continue;
                 }
-
-                auto value = extract_value_from_document(doc, col_info->json_path, col_info->type.type());
+                auto value = extract_value_from_document(doc, cols[col].name(), cols[col].type().type());
                 if (value.is_null()) {
                     vec.set_null(row, true);
                 } else {
