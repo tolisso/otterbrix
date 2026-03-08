@@ -15,7 +15,7 @@ import argparse
 from otterbrix import Client
 
 # JSONBench queries adapted for otterbrix SQL syntax
-# Using document_table storage with dot notation for nested fields
+# Using columns (dynamic table) storage with dot notation for nested fields
 QUERIES = [
     # Q1: Top event types (GROUP BY)
     "SELECT commit_dot_collection AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;",

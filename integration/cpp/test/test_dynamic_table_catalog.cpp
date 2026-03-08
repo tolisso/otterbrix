@@ -15,8 +15,8 @@ bool schema_has_field(const types::complex_logical_type& schema,
     });
 }
 
-TEST_CASE("document_table catalog integration") {
-    auto config = test_create_config("/tmp/test_document_table_catalog");
+TEST_CASE("dynamic_table catalog integration") {
+    auto config = test_create_config("/tmp/test_dynamic_table_catalog");
     test_clear_directory(config);
     config.disk.on = false;
     config.wal.on = false;
@@ -33,7 +33,7 @@ TEST_CASE("document_table catalog integration") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE catalog_testdb.users() WITH (storage='document_table');");
+                "CREATE TABLE catalog_testdb.users();");
             REQUIRE(cur->is_success());
         }
 
@@ -84,7 +84,7 @@ TEST_CASE("document_table catalog integration") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE catalog_testdb.evolving() WITH (storage='document_table');");
+                "CREATE TABLE catalog_testdb.evolving();");
             REQUIRE(cur->is_success());
         }
 
@@ -164,7 +164,7 @@ TEST_CASE("document_table catalog integration") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE catalog_testdb.typed() WITH (storage='document_table');");
+                "CREATE TABLE catalog_testdb.typed();");
             REQUIRE(cur->is_success());
         }
 
@@ -216,7 +216,7 @@ TEST_CASE("document_table catalog integration") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE catalog_testdb.multitypes() WITH (storage='document_table');");
+                "CREATE TABLE catalog_testdb.multitypes();");
             REQUIRE(cur->is_success());
         }
 
@@ -258,7 +258,7 @@ TEST_CASE("document_table catalog integration") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE catalog_testdb.same_type() WITH (storage='document_table');");
+                "CREATE TABLE catalog_testdb.same_type();");
             REQUIRE(cur->is_success());
         }
 
@@ -300,7 +300,7 @@ TEST_CASE("document_table catalog integration") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE catalog_testdb.batch() WITH (storage='document_table');");
+                "CREATE TABLE catalog_testdb.batch();");
             REQUIRE(cur->is_success());
         }
 
@@ -350,7 +350,7 @@ TEST_CASE("document_table catalog integration") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE catalog_testdb.nested() WITH (storage='document_table');");
+                "CREATE TABLE catalog_testdb.nested();");
             REQUIRE(cur->is_success());
         }
 
@@ -382,7 +382,7 @@ TEST_CASE("document_table catalog integration") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE catalog_testdb.select_test() WITH (storage='document_table');");
+                "CREATE TABLE catalog_testdb.select_test();");
             REQUIRE(cur->is_success());
         }
 
@@ -427,7 +427,7 @@ TEST_CASE("document_table catalog integration") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE catalog_testdb.agg_test() WITH (storage='document_table');");
+                "CREATE TABLE catalog_testdb.agg_test();");
             REQUIRE(cur->is_success());
         }
 

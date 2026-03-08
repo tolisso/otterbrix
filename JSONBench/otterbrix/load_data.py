@@ -74,7 +74,7 @@ def load_data_directory(data_dir: str, num_files: int = None, max_records: int =
             if max_records and total_count >= max_records:
                 return
 
-def create_database(client, storage_type: str = 'document_table'):
+def create_database(client, storage_type: str = 'columns'):
     """Create the bluesky_bench database and bluesky table."""
     # Create database
     try:
@@ -84,7 +84,10 @@ def create_database(client, storage_type: str = 'document_table'):
         print(f"Database creation note: {e}")
 
     # Create table with specified storage type
-    create_sql = f"CREATE TABLE bluesky_bench.bluesky() WITH (storage='{storage_type}');"
+    if storage_type == 'columns':
+        create_sql = "CREATE TABLE bluesky_bench.bluesky();"
+    else:
+        create_sql = f"CREATE TABLE bluesky_bench.bluesky() WITH (storage='{storage_type}');"
     try:
         cursor = client.execute(create_sql)
         cursor.close()
@@ -148,9 +151,9 @@ def main():
     parser.add_argument('--data-file', '-f', help='Single NDJSON file to load')
     parser.add_argument('--num-files', '-n', type=int, help='Number of files to load from directory')
     parser.add_argument('--max-records', '-m', type=int, help='Maximum records to load')
-    parser.add_argument('--storage', '-s', default='document_table',
-                        choices=['document_table', 'documents'],
-                        help='Storage type (default: document_table)')
+    parser.add_argument('--storage', '-s', default='columns',
+                        choices=['columns', 'documents'],
+                        help='Storage type (default: columns)')
     parser.add_argument('--batch-size', '-b', type=int, default=1000, help='Batch size for inserts')
 
     args = parser.parse_args()

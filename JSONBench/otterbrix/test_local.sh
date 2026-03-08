@@ -32,7 +32,7 @@ rm -rf "$DB_PATH"
 echo "=== Loading Data ==="
 python3 "$SCRIPT_DIR/load_data.py" "$DB_PATH" \
     --data-file "$TEST_FILE" \
-    --storage document_table \
+    --storage columns \
     --batch-size 1000
 
 echo ""

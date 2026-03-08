@@ -12,7 +12,7 @@ static const database_name_t database_name = "bluesky_bench";
 static const collection_name_t collection_name = "bluesky";
 
 // Number of documents to use from the dataset (max 100000)
-static constexpr size_t DOC_LIMIT = 100000;
+static constexpr size_t DOC_LIMIT = 1000000;
 
 // Set to true to also benchmark document (B-tree) storage
 static constexpr bool TEST_DOCUMENT_STORAGE = true;
@@ -65,14 +65,14 @@ struct BenchmarkResult {
 };
 
 struct QueryPair {
-    std::string document_table_query;
+    std::string table_query;
     std::string document_query;
 
-    QueryPair(const std::string& dt_query, const std::string& doc_query)
-        : document_table_query(dt_query), document_query(doc_query) {}
+    QueryPair(const std::string& t_query, const std::string& doc_query)
+        : table_query(t_query), document_query(doc_query) {}
 
     explicit QueryPair(const std::string& query)
-        : document_table_query(query), document_query(query) {}
+        : table_query(query), document_query(query) {}
 };
 
 std::unique_ptr<test_spaces> setup_storage(const std::string& tmp_dir,
@@ -87,7 +87,12 @@ std::unique_ptr<test_spaces> setup_storage(const std::string& tmp_dir,
 
     dispatcher->create_database(otterbrix::session_id_t(), database_name);
 
-    std::string create_sql = "CREATE TABLE bluesky_bench.bluesky() WITH (storage='" + storage_type + "');";
+    std::string create_sql;
+    if (storage_type == "columns") {
+        create_sql = "CREATE TABLE bluesky_bench.bluesky();";
+    } else {
+        create_sql = "CREATE TABLE bluesky_bench.bluesky() WITH (storage='" + storage_type + "');";
+    }
     auto cur = dispatcher->execute_sql(otterbrix::session_id_t(), create_sql);
     REQUIRE(cur->is_success());
 
@@ -207,8 +212,8 @@ void print_comparison(const std::string& test_name,
                      const BenchmarkResult& doc_result,
                      const std::string& unit = "records") {
     std::cout << "\n--- " << test_name << " ---" << std::endl;
-    std::cout << "document_table: " << dt_result.time_ms << " ms (" << dt_result.count << " " << unit << ")" << std::endl;
-    std::cout << "document:       " << doc_result.time_ms << " ms (" << doc_result.count << " " << unit << ")" << std::endl;
+    std::cout << "table (columns): " << dt_result.time_ms << " ms (" << dt_result.count << " " << unit << ")" << std::endl;
+    std::cout << "document:        " << doc_result.time_ms << " ms (" << doc_result.count << " " << unit << ")" << std::endl;
 
     if (doc_result.time_ms > 0 && dt_result.time_ms > 0) {
         if (doc_result.time_ms < dt_result.time_ms) {
@@ -216,7 +221,7 @@ void print_comparison(const std::string& test_name,
             std::cout << "Winner: document (B-tree) - " << std::fixed << std::setprecision(1) << speedup << "x faster" << std::endl;
         } else {
             double speedup = (double)doc_result.time_ms / dt_result.time_ms;
-            std::cout << "Winner: document_table - " << std::fixed << std::setprecision(1) << speedup << "x faster" << std::endl;
+            std::cout << "Winner: table (columns) - " << std::fixed << std::setprecision(1) << speedup << "x faster" << std::endl;
         }
     }
 }
@@ -234,10 +239,10 @@ TEST_CASE("JSONBench Q1: Top event types", "[jsonbench][q1]") {
         "SELECT \"/commit/collection\" AS event, COUNT(*) AS count FROM bluesky_bench.bluesky GROUP BY event ORDER BY count DESC;"
     );
 
-    std::cout << "[1] Testing document_table..." << std::endl;
-    auto dt_space = setup_storage("/tmp/bench_q1_dt", json_lines, "document_table");
-    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
-    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
+    std::cout << "[1] Testing table (columns)..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q1_dt", json_lines, "columns");
+    auto dt_result = run_query(dt_space, queries.table_query, "columns");
+    std::cout << "  table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
 
     if (TEST_DOCUMENT_STORAGE) {
         std::cout << "[2] Testing document..." << std::endl;
@@ -263,10 +268,10 @@ TEST_CASE("JSONBench Q2: Event types with unique users", "[jsonbench][q2]") {
         "GROUP BY event ORDER BY count DESC;"
     );
 
-    std::cout << "[1] Testing document_table..." << std::endl;
-    auto dt_space = setup_storage("/tmp/bench_q2_dt", json_lines, "document_table");
-    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
-    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
+    std::cout << "[1] Testing table (columns)..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q2_dt", json_lines, "columns");
+    auto dt_result = run_query(dt_space, queries.table_query, "columns");
+    std::cout << "  table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
 
     if (TEST_DOCUMENT_STORAGE) {
         std::cout << "[2] Testing document..." << std::endl;
@@ -294,10 +299,10 @@ TEST_CASE("JSONBench Q3: Event counts with filters", "[jsonbench][q3]") {
         "GROUP BY event ORDER BY count DESC;"
     );
 
-    std::cout << "[1] Testing document_table..." << std::endl;
-    auto dt_space = setup_storage("/tmp/bench_q3_dt", json_lines, "document_table");
-    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
-    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
+    std::cout << "[1] Testing table (columns)..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q3_dt", json_lines, "columns");
+    auto dt_result = run_query(dt_space, queries.table_query, "columns");
+    std::cout << "  table: " << dt_result.time_ms << "ms (" << dt_result.count << " groups)" << std::endl;
 
     if (TEST_DOCUMENT_STORAGE) {
         std::cout << "[2] Testing document..." << std::endl;
@@ -325,10 +330,10 @@ TEST_CASE("JSONBench Q4: First 3 users to post", "[jsonbench][q4]") {
         "GROUP BY user_id ORDER BY first_post_time ASC LIMIT 3;"
     );
 
-    std::cout << "[1] Testing document_table..." << std::endl;
-    auto dt_space = setup_storage("/tmp/bench_q4_dt", json_lines, "document_table");
-    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
-    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " users)" << std::endl;
+    std::cout << "[1] Testing table (columns)..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q4_dt", json_lines, "columns");
+    auto dt_result = run_query(dt_space, queries.table_query, "columns");
+    std::cout << "  table: " << dt_result.time_ms << "ms (" << dt_result.count << " users)" << std::endl;
 
     if (TEST_DOCUMENT_STORAGE) {
         std::cout << "[2] Testing document..." << std::endl;
@@ -356,10 +361,10 @@ TEST_CASE("JSONBench Q5: Top 3 users by activity span", "[jsonbench][q5]") {
         "GROUP BY user_id LIMIT 3;"
     );
 
-    std::cout << "[1] Testing document_table..." << std::endl;
-    auto dt_space = setup_storage("/tmp/bench_q5_dt", json_lines, "document_table");
-    auto dt_result = run_query(dt_space, queries.document_table_query, "document_table");
-    std::cout << "  document_table: " << dt_result.time_ms << "ms (" << dt_result.count << " users)" << std::endl;
+    std::cout << "[1] Testing table (columns)..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q5_dt", json_lines, "columns");
+    auto dt_result = run_query(dt_space, queries.table_query, "columns");
+    std::cout << "  table: " << dt_result.time_ms << "ms (" << dt_result.count << " users)" << std::endl;
 
     if (TEST_DOCUMENT_STORAGE) {
         std::cout << "[2] Testing document..." << std::endl;
@@ -380,14 +385,14 @@ TEST_CASE("JSONBench Q1 Detailed Timing", "[jsonbench][q1][detailed]") {
 
     std::cout << "Query: " << query << std::endl;
 
-    std::cout << "\n[1/2] Setting up document_table storage..." << std::endl;
-    auto dt_space = setup_storage("/tmp/bench_q1_detailed_dt", json_lines, "document_table");
+    std::cout << "\n[1/2] Setting up table (columns) storage..." << std::endl;
+    auto dt_space = setup_storage("/tmp/bench_q1_detailed_dt", json_lines, "columns");
 
     // Run 3 times to get warm cache results
     std::cout << "\nRunning 3 iterations:" << std::endl;
     for (int i = 1; i <= 3; i++) {
         std::cout << "\n=== Iteration " << i << " ===" << std::endl;
-        auto result = run_query_detailed(dt_space, query, "document_table");
+        auto result = run_query_detailed(dt_space, query, "columns");
         print_detailed_result("Q1", result);
     }
 }
@@ -417,7 +422,7 @@ TEST_CASE("JSONBench Memory: Insert only", "[jsonbench][memory]") {
     dispatcher->create_database(otterbrix::session_id_t(), database_name);
     auto cur = dispatcher->execute_sql(
         otterbrix::session_id_t(),
-        "CREATE TABLE bluesky_bench.bluesky() WITH (storage='document_table');");
+        "CREATE TABLE bluesky_bench.bluesky();");
     REQUIRE(cur->is_success());
 
     size_t mem_after_create = get_memory_usage_mb();

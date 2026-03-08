@@ -10,7 +10,7 @@ static const collection_name_t collection_name = "users";
 using components::cursor::cursor_t_ptr;
 namespace types = components::types;
 
-TEST_CASE("document_table: primary key scan - basic findOne", "[integration][document_table][primary_key]") {
+TEST_CASE("dynamic_table: primary key scan - basic findOne", "[integration][dynamic_table][primary_key]") {
     auto config = test_create_config("/tmp/test_pk_basic");
     test_clear_directory(config);
     config.disk.on = false;
@@ -27,7 +27,7 @@ TEST_CASE("document_table: primary key scan - basic findOne", "[integration][doc
         auto session = otterbrix::session_id_t();
         auto cur = dispatcher->execute_sql(
             session,
-            "CREATE TABLE test_pk_db.users() WITH (storage='document_table');");
+            "CREATE TABLE test_pk_db.users();");
         REQUIRE(cur->is_success());
     }
 
@@ -97,7 +97,7 @@ TEST_CASE("document_table: primary key scan - basic findOne", "[integration][doc
     }
 }
 
-TEST_CASE("document_table: primary key scan - performance test", "[integration][document_table][primary_key][performance]") {
+TEST_CASE("dynamic_table: primary key scan - performance test", "[integration][dynamic_table][primary_key][performance]") {
     auto config = test_create_config("/tmp/test_pk_performance");
     test_clear_directory(config);
     config.disk.on = false;
@@ -114,7 +114,7 @@ TEST_CASE("document_table: primary key scan - performance test", "[integration][
         auto session = otterbrix::session_id_t();
         auto cur = dispatcher->execute_sql(
             session,
-            "CREATE TABLE test_pk_db.users() WITH (storage='document_table');");
+            "CREATE TABLE test_pk_db.users();");
         REQUIRE(cur->is_success());
     }
 
@@ -185,10 +185,10 @@ TEST_CASE("document_table: primary key scan - performance test", "[integration][
     }
 
     // NOTE: primary_key_scan vs full_scan comparison removed - both now use full_scan
-    // (document_table operators removed; all routing goes through table planner)
+    // (all routing goes through table planner)
 }
 
-TEST_CASE("document_table: primary key scan - multiple lookups", "[integration][document_table][primary_key]") {
+TEST_CASE("dynamic_table: primary key scan - multiple lookups", "[integration][dynamic_table][primary_key]") {
     auto config = test_create_config("/tmp/test_pk_multiple");
     test_clear_directory(config);
     config.disk.on = false;
@@ -205,7 +205,7 @@ TEST_CASE("document_table: primary key scan - multiple lookups", "[integration][
         auto session = otterbrix::session_id_t();
         auto cur = dispatcher->execute_sql(
             session,
-            "CREATE TABLE test_pk_db.users() WITH (storage='document_table');");
+            "CREATE TABLE test_pk_db.users();");
         REQUIRE(cur->is_success());
     }
 

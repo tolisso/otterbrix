@@ -221,7 +221,7 @@ TEST_CASE("dispatcher::computed_operations") {
     });
 
     // Type conflict: name was STRING but now inserting INT, count was BIGINT but now inserting STRING
-    // For document_table: one path = one type, so type conflicts should fail
+    // For dynamic schema tables: one path = one type, so type conflicts should fail
     test.execute_sql("INSERT INTO test.test (_id, name, count) VALUES ('" + gen_id(100) + "', 10, 'test');");
     test.step_with_assertion([&id](cursor_t_ptr cur, catalog& catalog) {
         // Type mismatch should cause error

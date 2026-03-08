@@ -905,7 +905,7 @@ namespace services::dispatcher {
                     }
                     break;
                 }
-                // Handle data_chunk for non-document_table formats
+                // Handle data_chunk for non-documents formats
                 if (node_info->uses_data_chunk() && comp_sch.has_value()) {
                     const auto& chunk_types = node_info->data_chunk().types();
                     for (const auto& col_type : chunk_types) {

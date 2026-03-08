@@ -4,15 +4,15 @@
 static const database_name_t database_name = "testdb";
 static const collection_name_t collection_name = "testcol";
 
-TEST_CASE("document_table - SQL integration test") {
-    auto config = test_create_config("/tmp/test_document_table_sql");
+TEST_CASE("dynamic_table - SQL integration test") {
+    auto config = test_create_config("/tmp/test_dynamic_table_sql");
     test_clear_directory(config);
     config.disk.on = false;
     config.wal.on = false;
     test_spaces space(config);
     auto* dispatcher = space.dispatcher();
 
-    SECTION("CREATE TABLE with document_table storage") {
+    SECTION("dynamic table storage") {
         {
             auto session = otterbrix::session_id_t();
             dispatcher->create_database(session, database_name);
@@ -21,12 +21,12 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Users() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Users();");
             REQUIRE(cur->is_success());
         }
     }
 
-    SECTION("INSERT and SELECT from document_table") {
+    SECTION("dynamic table") {
         {
             auto session = otterbrix::session_id_t();
             dispatcher->create_database(session, database_name);
@@ -35,7 +35,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Products() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Products();");
             REQUIRE(cur->is_success());
         }
         {
@@ -80,7 +80,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Items() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Items();");
             REQUIRE(cur->is_success());
         }
         {
@@ -107,7 +107,7 @@ TEST_CASE("document_table - SQL integration test") {
                 session,
                 "SELECT * FROM TestDB.Items;");
             REQUIRE(cur->is_success());
-            // TODO: Check size when cursor properly handles data_chunk from document_table
+            // TODO: Check size when cursor properly handles data_chunk from dynamic_table
             // REQUIRE(cur->size() == 2); // Only Item2 and Item3 remain
         }
     }
@@ -121,7 +121,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Docs() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Docs();");
             REQUIRE(cur->is_success());
         }
         {
@@ -147,7 +147,7 @@ TEST_CASE("document_table - SQL integration test") {
                 session,
                 "SELECT * FROM TestDB.Docs;");
             REQUIRE(cur->is_success());
-            // TODO: Check size when cursor properly handles data_chunk from document_table
+            // TODO: Check size when cursor properly handles data_chunk from dynamic_table
             // REQUIRE(cur->size() == 2);
         }
     }
@@ -161,7 +161,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Inventory() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Inventory();");
             REQUIRE(cur->is_success());
         }
         {
@@ -209,7 +209,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Books() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Books();");
             REQUIRE(cur->is_success());
         }
         {
@@ -258,7 +258,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Sales() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Sales();");
             REQUIRE(cur->is_success());
         }
         {
@@ -324,7 +324,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Employees() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Employees();");
             REQUIRE(cur->is_success());
         }
         {
@@ -382,7 +382,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Numbers() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Numbers();");
             REQUIRE(cur->is_success());
         }
         {
@@ -429,7 +429,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Mixed() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Mixed();");
             REQUIRE(cur->is_success());
         }
         {
@@ -469,7 +469,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.Empty() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.Empty();");
             REQUIRE(cur->is_success());
         }
         {
@@ -514,7 +514,7 @@ TEST_CASE("document_table - SQL integration test") {
             auto session = otterbrix::session_id_t();
             auto cur = dispatcher->execute_sql(
                 session,
-                "CREATE TABLE TestDB.TypeTest() WITH (storage='document_table');");
+                "CREATE TABLE TestDB.TypeTest();");
             REQUIRE(cur->is_success());
         }
         {

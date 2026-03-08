@@ -30,10 +30,7 @@ namespace components::sql::transform {
                 auto def_elem = pg_ptr_assert_cast<DefElem>(opt.data, T_DefElem);
                 if (std::string(def_elem->defname) == "storage") {
                     auto storage_value = strVal(def_elem->arg);
-                    if (std::strcmp(storage_value, "document_table") == 0) {
-                        // document_table is now stored as dynamic-schema columns table
-                        storage_format = components::catalog::used_format_t::columns;
-                    } else if (std::strcmp(storage_value, "documents") == 0) {
+                    if (std::strcmp(storage_value, "documents") == 0) {
                         storage_format = components::catalog::used_format_t::documents;
                     } else if (std::strcmp(storage_value, "columns") == 0) {
                         storage_format = components::catalog::used_format_t::columns;

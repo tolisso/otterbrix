@@ -243,7 +243,7 @@ namespace services {
 
         auto storage_format = create_collection_plan->storage_format();
 
-        // columns format with empty schema = dynamic schema table (formerly document_table)
+        // columns format with empty schema = dynamic schema table
         if (storage_format == components::catalog::used_format_t::columns &&
             create_collection_plan->schema().empty()) {
             collections_.emplace(logical_plan->collection_full_name(),

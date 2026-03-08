@@ -92,7 +92,7 @@ namespace services::collection::executor {
                                   components::catalog::used_format_t data_format) {
         trace(log_, "executor::execute_plan, session: {}", session.data());
 
-        // Preprocessing: convert document_table INSERT documents → data_chunk
+        // Preprocessing: for dynamic schema tables, convert documents → data_chunk
         // so we can route through the standard table planner
         if (logical_plan->type() == components::logical_plan::node_type::insert_t) {
             auto it = context_storage.find(logical_plan->collection_full_name());
@@ -466,14 +466,6 @@ namespace services::collection::executor {
               "executor::execute_plan : operators::operator_type::insert {}",
               plan->output() ? plan->output()->size() : 0);
         
-        // DEBUG: Log storage type and output info
-        trace(log_, 
-              "executor::insert_document_impl DEBUG: storage_type={}, has_output={}, uses_documents={}, uses_data_chunk={}",
-              static_cast<int>(collection->storage_type()),
-              plan->output() != nullptr,
-              plan->output() ? plan->output()->uses_documents() : false,
-              plan->output() ? plan->output()->uses_data_chunk() : false);
-        
         // TODO: disk support for data_table
         if (!plan->output() || plan->output()->uses_documents()) {
             trace(log_, "executor::insert_document_impl: Using documents path");
@@ -499,9 +491,9 @@ namespace services::collection::executor {
             execute_sub_plan_finish_(session, make_cursor(resource(), std::move(documents)));
         } else {
             trace(log_, "executor::insert_document_impl: Using data_chunk path");
-            // For document_table, use the output data_chunk directly since it already contains the inserted data
+            // For dynamic schema tables, output data_chunk already contains the inserted data
             if (collection->has_dynamic_schema() && plan->output() && plan->output()->uses_data_chunk()) {
-                trace(log_, "executor::insert_document_impl: DOCUMENT_TABLE branch, output size={}", plan->output()->size());
+                trace(log_, "executor::insert_document_impl: dynamic schema branch, output size={}", plan->output()->size());
                 // Get reference to the output chunk
                 auto& output_chunk = plan->output()->data_chunk();
                 trace(log_, "executor::insert_document_impl: output_chunk size={}, column_count={}", output_chunk.size(), output_chunk.column_count());
@@ -524,11 +516,9 @@ namespace services::collection::executor {
                 output_chunk.copy(chunk_for_cursor, 0);
                 trace(log_, "executor::insert_document_impl: Created chunk_for_cursor, size={}, creating cursor", chunk_for_cursor.size());
                 execute_sub_plan_finish_(session, make_cursor(resource(), std::move(chunk_for_cursor)));
-                trace(log_, "executor::insert_document_impl: DOCUMENT_TABLE branch completed");
+                trace(log_, "executor::insert_document_impl: dynamic table branch completed");
                 return;
             }
-            
-            trace(log_, "executor::insert_document_impl: Not DOCUMENT_TABLE or conditions not met, using regular table path");
             
             actor_zeta::send(collection->disk(),
                              address(),

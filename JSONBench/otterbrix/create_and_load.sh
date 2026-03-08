@@ -33,7 +33,7 @@ echo "Number of files: $NUM_FILES"
 python3 "$SCRIPT_DIR/load_data.py" "$DB_PATH" \
     --data-dir "$DATA_DIRECTORY" \
     --num-files "$NUM_FILES" \
-    --storage document_table \
+    --storage columns \
     --batch-size 1000 \
     2>"$ERROR_LOG" | tee "$SUCCESS_LOG"
 
