@@ -28,7 +28,7 @@ if [[ "$3" == "--no-cleanup" || "$2" == "--no-cleanup" ]]; then
 fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OTTERBRIX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-TEST_FILE="$OTTERBRIX_ROOT/integration/cpp/test/test_sample_${NUM_RECORDS}.json"
+TEST_FILE="$OTTERBRIX_ROOT/integration/cpp/test/test_sample_100_000_filtered.json"
 DB_NAME="bluesky_test"
 TABLE_NAME="bluesky"
 

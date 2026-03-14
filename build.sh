@@ -192,8 +192,11 @@ echo -e "${GREEN}✓ Dependencies installed successfully${NC}"
 # Step 6: Configure CMake
 print_section "Step 6: Configuring CMake"
 
+# Remove stale CMake cache to avoid using wrong build type toolchain
+rm -f CMakeCache.txt
+
 cmake .. -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE=./build/$BUILD_TYPE/generators/conan_toolchain.cmake \
+    -DCMAKE_TOOLCHAIN_FILE=./$BUILD_TYPE/generators/conan_toolchain.cmake \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DDEV_MODE="$DEV_MODE" \
     -DEXAMPLE=ON
