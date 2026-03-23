@@ -432,6 +432,17 @@ namespace services::dispatcher {
                 break;
             }
             case node_type::insert_t: {
+                // Sparse column routing: shadow collections to create/insert after the main insert.
+                struct shadow_insert_info_t {
+                    collection_full_name_t coll;
+                    components::vector::vector_t vec;
+                    std::pmr::string field_name;
+                    complex_logical_type field_type;
+                    uint64_t start_rowid;
+                    uint64_t row_count;
+                };
+                std::vector<shadow_insert_info_t> shadow_inserts;
+
                 if (catalog_.table_computes(id)) {
                     // Dynamic schema: expand schema and rename column aliases to physical names
                     auto& children = logic_plan->children();
@@ -443,45 +454,224 @@ namespace services::dispatcher {
                         uint64_t row_count = chunk.size();
                         update_result_.clear();
 
-                        for (auto& col : chunk.data) {
-                            auto field_name = col.type().alias();
-                            auto field_type = col.type();
+                        if (schema.has_sparse()) {
+                            // Sparse path: route sparse columns to shadow collections.
+                            uint64_t start_rowid = schema.alloc_rowids(row_count);
+                            complex_logical_type rowid_type{logical_type::BIGINT};
+                            rowid_type.set_alias("__rowid__");
+                            std::pmr::string rowid_field("__rowid__", resource());
 
-                            std::pmr::string pmr_field(field_name.c_str(), resource());
-                            if (!schema.has_type(pmr_field, field_type)) {
-                                // New (field_name, type) pair — add physical column to storage
+                            // Schema evolve __rowid__ in main table.
+                            if (!schema.is_in_main(rowid_field, rowid_type)) {
                                 std::string phys_name =
-                                    computed_schema::storage_column_name(field_name, field_type);
+                                    computed_schema::storage_column_name("__rowid__", rowid_type);
                                 components::table::column_definition_t col_def(
-                                    phys_name,
-                                    field_type,
-                                    false,
-                                    std::nullopt);
+                                    phys_name, rowid_type, false, std::nullopt);
                                 auto [_ac, acf] = actor_zeta::send(disk_address_,
                                                                    &disk::manager_disk_t::storage_add_column,
                                                                    session,
                                                                    logic_plan->collection_full_name(),
                                                                    col_def);
                                 co_await std::move(acf);
+                                schema.append_n(rowid_field, rowid_type, 0);
+                                schema.set_in_main(rowid_field, rowid_type);
+                            }
+                            schema.append_n(rowid_field, rowid_type, row_count);
+                            update_result_[std::make_pair(rowid_field, rowid_type)] += row_count;
+
+                            std::vector<components::vector::vector_t> new_chunk_data;
+                            for (auto& col : chunk.data) {
+                                auto field_name_str = col.type().alias();
+                                auto field_type = col.type();
+                                std::pmr::string pmr_field(field_name_str.c_str(), resource());
+
+                                size_t current_count = schema.get_count(pmr_field, field_type);
+                                if (current_count < schema.sparse_threshold()) {
+                                    // Sparse column: route to shadow collection.
+                                    std::string shadow_name =
+                                        std::string(logic_plan->collection_name()) + "__sp__" +
+                                        field_name_str + "__" +
+                                        std::to_string(static_cast<unsigned>(field_type.type()));
+                                    collection_full_name_t shadow_coll{
+                                        logic_plan->database_name(),
+                                        collection_name_t(shadow_name.c_str())};
+                                    shadow_inserts.emplace_back(shadow_insert_info_t{
+                                        shadow_coll,
+                                        components::vector::vector_t(col),
+                                        std::pmr::string(field_name_str.c_str(), resource()),
+                                        field_type,
+                                        start_rowid,
+                                        row_count});
+                                    schema.append_n(pmr_field, field_type, row_count);
+                                    update_result_[std::make_pair(pmr_field, field_type)] += row_count;
+                                    // col excluded from main chunk
+                                } else {
+                                    // Full column: schema evolve and keep in main chunk.
+                                    if (!schema.is_in_main(pmr_field, field_type)) {
+                                        std::string phys_name = computed_schema::storage_column_name(
+                                            field_name_str, field_type);
+                                        components::table::column_definition_t col_def(
+                                            phys_name, field_type, false, std::nullopt);
+                                        auto [_ac, acf] =
+                                            actor_zeta::send(disk_address_,
+                                                             &disk::manager_disk_t::storage_add_column,
+                                                             session,
+                                                             logic_plan->collection_full_name(),
+                                                             col_def);
+                                        co_await std::move(acf);
+                                        schema.set_in_main(pmr_field, field_type);
+                                    }
+                                    schema.append_n(pmr_field, field_type, row_count);
+                                    col.set_type_alias(computed_schema::storage_column_name(
+                                        field_name_str, field_type));
+                                    update_result_[std::make_pair(pmr_field, field_type)] += row_count;
+                                    new_chunk_data.push_back(std::move(col));
+                                }
                             }
 
-                            // Append to schema in INSERT column order so that column_order_ matches
-                            // physical storage column order. append() deduplicates, so repeated calls
-                            // for the same (field, type) are no-ops that preserve the original ordering.
-                            schema.append(pmr_field, field_type);
+                            // Append __rowid__ sequence vector to main chunk.
+                            components::vector::vector_t rowid_vec(resource(), rowid_type, row_count);
+                            rowid_vec.sequence(static_cast<int64_t>(start_rowid), 1, row_count);
+                            rowid_vec.set_type_alias(
+                                computed_schema::storage_column_name("__rowid__", rowid_type));
+                            new_chunk_data.push_back(std::move(rowid_vec));
+                            chunk.data = std::move(new_chunk_data);
+                        } else {
+                            // Non-sparse path (original logic).
+                            for (auto& col : chunk.data) {
+                                auto field_name = col.type().alias();
+                                auto field_type = col.type();
 
-                            // Rename alias to physical column name so storage_append can match by name
-                            std::string phys_name =
-                                computed_schema::storage_column_name(field_name, field_type);
-                            col.set_type_alias(phys_name);
+                                std::pmr::string pmr_field(field_name.c_str(), resource());
+                                if (!schema.has_type(pmr_field, field_type)) {
+                                    // New (field_name, type) pair — add physical column to storage
+                                    std::string phys_name =
+                                        computed_schema::storage_column_name(field_name, field_type);
+                                    components::table::column_definition_t col_def(
+                                        phys_name, field_type, false, std::nullopt);
+                                    auto [_ac, acf] =
+                                        actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_add_column,
+                                                         session,
+                                                         logic_plan->collection_full_name(),
+                                                         col_def);
+                                    co_await std::move(acf);
+                                }
 
-                            // Track for computed_schema refcount update after successful INSERT
-                            update_result_[{std::pmr::string(field_name.c_str(), resource()), field_type}] +=
-                                row_count;
+                                // Append to schema in INSERT column order so that column_order_ matches
+                                // physical storage column order. append() deduplicates, so repeated
+                                // calls for the same (field, type) are no-ops preserving the ordering.
+                                schema.append(pmr_field, field_type);
+
+                                // Rename alias to physical column name so storage_append can match by name
+                                std::string phys_name =
+                                    computed_schema::storage_column_name(field_name, field_type);
+                                col.set_type_alias(phys_name);
+
+                                // Track for computed_schema refcount update after successful INSERT
+                                update_result_[{std::pmr::string(field_name.c_str(), resource()),
+                                                field_type}] += row_count;
+                            }
                         }
                     }
                 }
                 exec_result = co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
+
+                // Execute shadow inserts (sparse columns) after the main insert succeeds.
+                if (!shadow_inserts.empty() && exec_result.cursor->is_success()) {
+                    for (auto& shadow : shadow_inserts) {
+                        table_id shadow_id(resource(), shadow.coll);
+
+                        // Lazily create shadow collection on first use.
+                        if (!catalog_.table_computes(shadow_id)) {
+                            auto err = catalog_.create_computing_table(shadow_id);
+                            assert(!err);
+                            auto [_cs, csf] = actor_zeta::send(disk_address_,
+                                                               &disk::manager_disk_t::create_storage,
+                                                               session,
+                                                               shadow.coll);
+                            co_await std::move(csf);
+                            if (index_address_ != actor_zeta::address_t::empty_address()) {
+                                auto [_ri, rif] =
+                                    actor_zeta::send(index_address_,
+                                                     &index::manager_index_t::register_collection,
+                                                     session,
+                                                     shadow.coll);
+                                co_await std::move(rif);
+                            }
+                            collections_.insert(shadow.coll);
+                        }
+
+                        auto& shadow_schema = catalog_.get_computing_table_schema(shadow_id);
+
+                        complex_logical_type rowid_type{logical_type::BIGINT};
+                        rowid_type.set_alias("__rowid__");
+                        std::pmr::string rowid_field("__rowid__", resource());
+                        std::pmr::string value_field("value", resource());
+
+                        // Schema evolve shadow __rowid__.
+                        if (!shadow_schema.has_type(rowid_field, rowid_type)) {
+                            std::string phys_name =
+                                computed_schema::storage_column_name("__rowid__", rowid_type);
+                            components::table::column_definition_t col_def(
+                                phys_name, rowid_type, false, std::nullopt);
+                            auto [_ac, acf] = actor_zeta::send(disk_address_,
+                                                               &disk::manager_disk_t::storage_add_column,
+                                                               session,
+                                                               shadow.coll,
+                                                               col_def);
+                            co_await std::move(acf);
+                        }
+                        shadow_schema.append_n(rowid_field, rowid_type, shadow.row_count);
+
+                        // Schema evolve shadow value column.
+                        if (!shadow_schema.has_type(value_field, shadow.field_type)) {
+                            std::string phys_name =
+                                computed_schema::storage_column_name("value", shadow.field_type);
+                            components::table::column_definition_t col_def(
+                                phys_name, shadow.field_type, false, std::nullopt);
+                            auto [_ac, acf] = actor_zeta::send(disk_address_,
+                                                               &disk::manager_disk_t::storage_add_column,
+                                                               session,
+                                                               shadow.coll,
+                                                               col_def);
+                            co_await std::move(acf);
+                        }
+                        shadow_schema.append_n(value_field, shadow.field_type, shadow.row_count);
+
+                        // Build shadow rowid vector.
+                        components::vector::vector_t shadow_rowid(resource(), rowid_type, shadow.row_count);
+                        shadow_rowid.sequence(static_cast<int64_t>(shadow.start_rowid),
+                                              1,
+                                              shadow.row_count);
+                        shadow_rowid.set_type_alias(
+                            computed_schema::storage_column_name("__rowid__", rowid_type));
+
+                        // Rename value vector alias to physical name.
+                        shadow.vec.set_type_alias(
+                            computed_schema::storage_column_name("value", shadow.field_type));
+
+                        // Build shadow data chunk.
+                        std::pmr::vector<complex_logical_type> shadow_types(resource());
+                        shadow_types.push_back(rowid_type);
+                        shadow_types.push_back(shadow.field_type);
+                        components::vector::data_chunk_t shadow_chunk(resource(), shadow_types, shadow.row_count);
+                        shadow_chunk.data[0] = std::move(shadow_rowid);
+                        shadow_chunk.data[1] = std::move(shadow.vec);
+                        shadow_chunk.set_cardinality(shadow.row_count);
+
+                        auto shadow_data_node =
+                            make_node_raw_data(resource(), std::move(shadow_chunk));
+                        auto shadow_insert_node =
+                            make_node_insert(resource(), shadow.coll);
+                        shadow_insert_node->append_child(shadow_data_node);
+
+                        co_await execute_plan_impl(session,
+                                                   shadow_insert_node,
+                                                   storage_parameters(resource()),
+                                                   txn_data);
+                    }
+                }
                 break;
             }
             default:
@@ -1002,7 +1192,7 @@ namespace services::dispatcher {
             case node_type::create_collection_t: {
                 auto node_info = boost::polymorphic_pointer_downcast<node_create_collection_t>(node);
                 if (node_info->column_definitions().empty()) {
-                    auto err = catalog_.create_computing_table(id);
+                    auto err = catalog_.create_computing_table(id, node_info->sparse_threshold());
                     assert(!err);
                 } else {
                     auto types = node_info->schema();

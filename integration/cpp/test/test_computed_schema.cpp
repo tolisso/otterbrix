@@ -1,5 +1,10 @@
 #include "test_config.hpp"
 #include <catch2/catch.hpp>
+#include <components/catalog/catalog.hpp>
+#include <components/logical_plan/node_create_collection.hpp>
+#include <components/logical_plan/node_insert.hpp>
+#include <components/vector/data_chunk.hpp>
+#include <components/vector/vector.hpp>
 
 // Tests for computed_schema (dynamic per-type columnar storage)
 // A computed-schema table is created with CREATE TABLE db.t() — no fixed columns.
@@ -239,5 +244,148 @@ TEST_CASE("integration::cpp::test_computed_schema::multi_type_field") {
         REQUIRE(cur->chunk_data().column_count() == 2);
         REQUIRE(cur->chunk_data().value(1, 0).value<int64_t>() == 1);
         REQUIRE(cur->chunk_data().value(1, 1).value<int64_t>() == 2);
+    }
+}
+
+TEST_CASE("integration::cpp::test_computed_schema::sparse_columns") {
+    // Create a computing table with sparse_threshold=5 via C++ API.
+    // Inserting a column with < 5 rows should route it to a shadow collection.
+    auto config = test_create_config("/tmp/test_computed_schema/sparse");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+    auto* resource = dispatcher->resource();
+
+    collection_full_name_t main_coll{"cs_testdb", "t_sparse"};
+
+    {
+        auto session = otterbrix::session_id_t();
+        dispatcher->execute_sql(session, "CREATE DATABASE cs_testdb;");
+    }
+
+    // Create computing table with sparse_threshold=5 via C++ API
+    {
+        auto session = otterbrix::session_id_t();
+        auto create_node = components::logical_plan::make_node_create_collection(resource, main_coll, 5);
+        auto cur = dispatcher->execute_plan(session, create_node);
+        REQUIRE(cur->is_success());
+    }
+
+    // Insert 2 rows: id (bigint=12) and name (string=13) — both below threshold=5, go to shadow
+    {
+        auto session = otterbrix::session_id_t();
+        using namespace components::types;
+        complex_logical_type id_type{logical_type::BIGINT};
+        id_type.set_alias("id");
+        complex_logical_type name_type{logical_type::STRING_LITERAL};
+        name_type.set_alias("name");
+
+        std::pmr::vector<complex_logical_type> types(resource);
+        types.push_back(id_type);
+        types.push_back(name_type);
+
+        components::vector::data_chunk_t chunk(resource, types, 2);
+        chunk.set_value(0, 0, logical_value_t{resource, int64_t(1)});
+        chunk.set_value(0, 1, logical_value_t{resource, int64_t(2)});
+        chunk.set_value(1, 0, logical_value_t{resource, std::string("Alice")});
+        chunk.set_value(1, 1, logical_value_t{resource, std::string("Bob")});
+        chunk.set_cardinality(2);
+
+        auto insert_node = components::logical_plan::make_node_insert(resource, main_coll, std::move(chunk));
+        auto cur = dispatcher->execute_plan(session, insert_node);
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 2);
+    }
+
+    // Main table should have __rowid__ column but no id/name columns (they went to shadow)
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT * FROM cs_testdb.t_sparse;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 2);
+        // Only __rowid__ column in main table
+        REQUIRE(cur->chunk_data().column_count() == 1);
+    }
+
+    // Shadow collection for 'id' (BIGINT=14) should exist and contain 2 rows
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT * FROM cs_testdb.t_sparse__sp__id__14;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 2);
+        REQUIRE(cur->chunk_data().column_count() == 2); // __rowid__ + value
+    }
+
+    // Shadow collection for 'name' (STRING_LITERAL=35) should exist and contain 2 rows
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT * FROM cs_testdb.t_sparse__sp__name__35;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 2);
+        REQUIRE(cur->chunk_data().column_count() == 2); // __rowid__ + value
+    }
+
+    // Insert 4 more rows of id — cumulative count becomes 2+4=6, but at time of this INSERT count=2 < 5,
+    // so these 4 rows still go to shadow. After this INSERT shadow has 6 id rows total.
+    {
+        auto session = otterbrix::session_id_t();
+        using namespace components::types;
+        complex_logical_type id_type{logical_type::BIGINT};
+        id_type.set_alias("id");
+
+        std::pmr::vector<complex_logical_type> col_types(resource);
+        col_types.push_back(id_type);
+
+        components::vector::data_chunk_t chunk(resource, col_types, 4);
+        chunk.set_value(0, 0, logical_value_t{resource, int64_t(3)});
+        chunk.set_value(0, 1, logical_value_t{resource, int64_t(4)});
+        chunk.set_value(0, 2, logical_value_t{resource, int64_t(5)});
+        chunk.set_value(0, 3, logical_value_t{resource, int64_t(6)});
+        chunk.set_cardinality(4);
+
+        auto insert_node = components::logical_plan::make_node_insert(resource, main_coll, std::move(chunk));
+        auto cur = dispatcher->execute_plan(session, insert_node);
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 4);
+    }
+
+    // After two INSERTs, id count=6 accumulated in shadow. Main table still has only __rowid__.
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT * FROM cs_testdb.t_sparse;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 6);
+        REQUIRE(cur->chunk_data().column_count() == 1); // only __rowid__
+    }
+
+    // Now insert 1 more id row. At this point count=6 >= threshold=5, so it goes to main table.
+    {
+        auto session = otterbrix::session_id_t();
+        using namespace components::types;
+        complex_logical_type id_type{logical_type::BIGINT};
+        id_type.set_alias("id");
+
+        std::pmr::vector<complex_logical_type> col_types(resource);
+        col_types.push_back(id_type);
+
+        components::vector::data_chunk_t chunk(resource, col_types, 1);
+        chunk.set_value(0, 0, logical_value_t{resource, int64_t(7)});
+        chunk.set_cardinality(1);
+
+        auto insert_node = components::logical_plan::make_node_insert(resource, main_coll, std::move(chunk));
+        auto cur = dispatcher->execute_plan(session, insert_node);
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 1);
+    }
+
+    // Main table now has __rowid__ + id columns (total 2), 7 rows total
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT * FROM cs_testdb.t_sparse;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 7);
+        REQUIRE(cur->chunk_data().column_count() == 2); // __rowid__ + id
     }
 }
