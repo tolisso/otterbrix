@@ -114,6 +114,11 @@ namespace services::disk {
         storage_delete_rows(execution_context_t ctx, components::vector::vector_t row_ids, uint64_t count);
 
         actor_zeta::unique_future<uint64_t> storage_parallel_scan(session_id_t session, collection_full_name_t name);
+        actor_zeta::unique_future<void> storage_update_column(session_id_t session,
+                                                              collection_full_name_t name,
+                                                              std::string col_name,
+                                                              components::vector::vector_t row_ids,
+                                                              std::unique_ptr<components::vector::data_chunk_t> updates);
 
         // MVCC commit/revert
         actor_zeta::unique_future<void>
@@ -160,6 +165,7 @@ namespace services::disk {
                                                             &disk_contract::storage_update,
                                                             &disk_contract::storage_delete_rows,
                                                             &disk_contract::storage_parallel_scan,
+                                                            &disk_contract::storage_update_column,
                                                             // MVCC commit/revert
                                                             &disk_contract::storage_commit_append,
                                                             &disk_contract::storage_revert_append,

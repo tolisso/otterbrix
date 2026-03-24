@@ -48,6 +48,12 @@ namespace components::storage {
         virtual uint64_t append(vector::data_chunk_t& data) = 0;
 
         virtual void update(vector::vector_t& row_ids, vector::data_chunk_t& data) = 0;
+
+        // Update a single column by physical name. row_ids are physical row positions.
+        // updates must be a single-column data_chunk_t. No-op by default.
+        virtual void update_column(const std::string& /*col_name*/,
+                                   vector::vector_t& /*row_ids*/,
+                                   vector::data_chunk_t& /*updates*/) {}
         virtual std::pair<int64_t, uint64_t>
         update(vector::vector_t& row_ids, vector::data_chunk_t& data, table::transaction_data /*txn*/) {
             update(row_ids, data);

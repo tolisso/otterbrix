@@ -212,6 +212,11 @@ namespace services::disk {
         unique_future<uint64_t>
         storage_delete_rows(execution_context_t ctx, components::vector::vector_t row_ids, uint64_t count);
         unique_future<uint64_t> storage_parallel_scan(session_id_t session, collection_full_name_t name);
+        unique_future<void> storage_update_column(session_id_t session,
+                                                  collection_full_name_t name,
+                                                  std::string col_name,
+                                                  components::vector::vector_t row_ids,
+                                                  std::unique_ptr<components::vector::data_chunk_t> updates);
 
         // MVCC commit/revert
         unique_future<void>
@@ -258,6 +263,7 @@ namespace services::disk {
                                                        &manager_disk_t::storage_update,
                                                        &manager_disk_t::storage_delete_rows,
                                                        &manager_disk_t::storage_parallel_scan,
+                                                       &manager_disk_t::storage_update_column,
                                                        // MVCC commit/revert
                                                        &manager_disk_t::storage_commit_append,
                                                        &manager_disk_t::storage_revert_append,
@@ -489,6 +495,17 @@ namespace services::disk {
         unique_future<uint64_t> storage_parallel_scan(session_id_t /*session*/, collection_full_name_t /*name*/) {
             co_return 0;
         }
+        unique_future<void> storage_update_column(session_id_t /*session*/,
+                                                  collection_full_name_t name,
+                                                  std::string col_name,
+                                                  components::vector::vector_t row_ids,
+                                                  std::unique_ptr<components::vector::data_chunk_t> updates) {
+            auto* s = get_storage(name);
+            if (s && updates && updates->size() > 0) {
+                s->update_column(col_name, row_ids, *updates);
+            }
+            co_return;
+        }
 
         // MVCC commit/revert
         unique_future<void>
@@ -550,6 +567,7 @@ namespace services::disk {
                                                        &manager_disk_empty_t::storage_update,
                                                        &manager_disk_empty_t::storage_delete_rows,
                                                        &manager_disk_empty_t::storage_parallel_scan,
+                                                       &manager_disk_empty_t::storage_update_column,
                                                        // MVCC commit/revert
                                                        &manager_disk_empty_t::storage_commit_append,
                                                        &manager_disk_empty_t::storage_revert_append,

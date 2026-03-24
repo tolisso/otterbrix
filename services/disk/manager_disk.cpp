@@ -1267,6 +1267,19 @@ namespace services::disk {
         co_return total;
     }
 
+    manager_disk_t::unique_future<void>
+    manager_disk_t::storage_update_column(session_id_t /*session*/,
+                                          collection_full_name_t name,
+                                          std::string col_name,
+                                          components::vector::vector_t row_ids,
+                                          std::unique_ptr<components::vector::data_chunk_t> updates) {
+        auto* s = get_storage(name);
+        if (s && updates && updates->size() > 0) {
+            s->update_column(col_name, row_ids, *updates);
+        }
+        co_return;
+    }
+
     // MVCC commit/revert methods
 
     manager_disk_t::unique_future<void> manager_disk_t::storage_commit_append(execution_context_t ctx,
@@ -1372,7 +1385,11 @@ namespace services::disk {
                 break;
             }
             case actor_zeta::msg_id<manager_disk_empty_t, &manager_disk_empty_t::storage_add_column>: {
+                fprintf(stderr, "[behavior] storage_add_column case MATCHED\n");
+                fflush(stderr);
                 co_await actor_zeta::dispatch(this, &manager_disk_empty_t::storage_add_column, msg);
+                fprintf(stderr, "[behavior] storage_add_column DONE\n");
+                fflush(stderr);
                 break;
             }
             // Storage queries
@@ -1554,10 +1571,31 @@ namespace services::disk {
     manager_disk_empty_t::storage_add_column(session_id_t /*session*/,
                                              collection_full_name_t name,
                                              components::table::column_definition_t new_column) {
+        fprintf(stderr, "[storage_add_column] ENTERED col=%s db=%s coll=%s\n",
+                new_column.name().c_str(), name.database.c_str(), name.collection.c_str());
+        fflush(stderr);
         auto it = storages_.find(name);
         if (it != storages_.end()) {
-            it->second->add_column(std::move(new_column));
+            try {
+                it->second->add_column(std::move(new_column));
+                fprintf(stderr, "[storage_add_column] add_column OK\n");
+                fflush(stderr);
+            } catch (const std::exception& e) {
+                fprintf(stderr, "[storage_add_column] EXCEPTION: %s\n", e.what());
+                fflush(stderr);
+                throw;
+            } catch (...) {
+                fprintf(stderr, "[storage_add_column] UNKNOWN EXCEPTION\n");
+                fflush(stderr);
+                throw;
+            }
+        } else {
+            fprintf(stderr, "[storage_add_column] collection NOT FOUND: %s.%s\n",
+                    name.database.c_str(), name.collection.c_str());
+            fflush(stderr);
         }
+        fprintf(stderr, "[storage_add_column] co_return\n");
+        fflush(stderr);
         co_return;
     }
 

@@ -123,6 +123,18 @@ namespace components::storage {
             table_.update(*update_state, row_ids, data);
         }
 
+        void update_column(const std::string& col_name,
+                           vector::vector_t& row_ids,
+                           vector::data_chunk_t& updates) override {
+            const auto& cols = table_.columns();
+            for (size_t i = 0; i < cols.size(); ++i) {
+                if (cols[i].name() == col_name) {
+                    table_.update_column(row_ids, {i}, updates);
+                    return;
+                }
+            }
+        }
+
         std::pair<int64_t, uint64_t>
         update(vector::vector_t& row_ids, vector::data_chunk_t& data, table::transaction_data txn) override {
             auto count = static_cast<uint64_t>(data.size());

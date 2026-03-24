@@ -456,12 +456,17 @@ namespace services::dispatcher {
 
                         if (schema.has_sparse()) {
                             // Sparse path: route sparse columns to shadow collections.
+                            fprintf(stderr, "[sparse_insert] session=%llu rows=%llu\n",
+                                    static_cast<unsigned long long>(session.data()), static_cast<unsigned long long>(row_count));
+                            fflush(stderr);
                             uint64_t start_rowid = schema.alloc_rowids(row_count);
                             complex_logical_type rowid_type{logical_type::BIGINT};
                             rowid_type.set_alias("__rowid__");
                             std::pmr::string rowid_field("__rowid__", resource());
 
                             // Schema evolve __rowid__ in main table.
+                            fprintf(stderr, "[sparse_insert] is_in_main(rowid)=%d\n", static_cast<int>(schema.is_in_main(rowid_field, rowid_type)));
+                            fflush(stderr);
                             if (!schema.is_in_main(rowid_field, rowid_type)) {
                                 std::string phys_name =
                                     computed_schema::storage_column_name("__rowid__", rowid_type);
@@ -507,19 +512,73 @@ namespace services::dispatcher {
                                     // col excluded from main chunk
                                 } else {
                                     // Full column: schema evolve and keep in main chunk.
+                                    fprintf(stderr, "[full_col] field=%s count=%zu is_in_main=%d\n",
+                                            field_name_str.c_str(), current_count,
+                                            static_cast<int>(schema.is_in_main(pmr_field, field_type)));
+                                    fflush(stderr);
                                     if (!schema.is_in_main(pmr_field, field_type)) {
                                         std::string phys_name = computed_schema::storage_column_name(
                                             field_name_str, field_type);
                                         components::table::column_definition_t col_def(
                                             phys_name, field_type, false, std::nullopt);
+                                        fprintf(stderr, "[full_col] sending storage_add_column for %s\n", phys_name.c_str());
+                                        fflush(stderr);
                                         auto [_ac, acf] =
                                             actor_zeta::send(disk_address_,
                                                              &disk::manager_disk_t::storage_add_column,
                                                              session,
                                                              logic_plan->collection_full_name(),
                                                              col_def);
+                                        fprintf(stderr, "[full_col] awaiting storage_add_column\n");
+                                        fflush(stderr);
                                         co_await std::move(acf);
                                         schema.set_in_main(pmr_field, field_type);
+
+                                        // Backfill: move accumulated shadow data into the main column.
+                                        std::string shadow_name =
+                                            std::string(logic_plan->collection_name()) + "__sp__" +
+                                            field_name_str + "__" +
+                                            std::to_string(static_cast<unsigned>(field_type.type()));
+                                        collection_full_name_t shadow_coll{
+                                            logic_plan->database_name(),
+                                            collection_name_t(shadow_name.c_str())};
+                                        table_id shadow_tid(resource(), shadow_coll);
+
+                                        if (catalog_.table_computes(shadow_tid)) {
+                                            complex_logical_type rowid_type{logical_type::BIGINT};
+                                            rowid_type.set_alias("__rowid__");
+                                            auto [_ss, ssf] = actor_zeta::send(
+                                                disk_address_,
+                                                &disk::manager_disk_t::storage_scan,
+                                                session,
+                                                shadow_coll,
+                                                std::unique_ptr<components::table::table_filter_t>{},
+                                                -1,
+                                                components::table::transaction_data{0, 0});
+                                            auto shadow_chunk = co_await std::move(ssf);
+
+                                            if (shadow_chunk && shadow_chunk->size() > 0) {
+                                                // shadow_chunk: col[0]=__rowid__ (physical row IDs), col[1]=value
+                                                auto row_ids = shadow_chunk->data[0];
+                                                std::pmr::vector<complex_logical_type> val_types(resource());
+                                                val_types.push_back(field_type);
+                                                auto val_chunk = std::make_unique<
+                                                    components::vector::data_chunk_t>(
+                                                    resource(), val_types, shadow_chunk->size());
+                                                val_chunk->data[0] = shadow_chunk->data[1];
+                                                val_chunk->set_cardinality(shadow_chunk->size());
+
+                                                auto [_uc, ucf] = actor_zeta::send(
+                                                    disk_address_,
+                                                    &disk::manager_disk_t::storage_update_column,
+                                                    session,
+                                                    logic_plan->collection_full_name(),
+                                                    phys_name,
+                                                    std::move(row_ids),
+                                                    std::move(val_chunk));
+                                                co_await std::move(ucf);
+                                            }
+                                        }
                                     }
                                     schema.append_n(pmr_field, field_type, row_count);
                                     col.set_type_alias(computed_schema::storage_column_name(
