@@ -25,7 +25,6 @@ target_link_libraries(
 
         absl::int128
         Boost::boost
-        magic_enum::magic_enum
         msgpackc-cxx
 )
 
