@@ -12,10 +12,9 @@ namespace components::operators {
         if (!left_ || !left_->output()) {
             return;
         }
-        const auto& chunk = left_->output()->data_chunk();
+        auto chunk = left_->output()->merged();
         auto types = chunk.types();
-        output_ = operators::make_operator_data(left_->output()->resource(), types, chunk.size());
-        auto& out_chunk = output_->data_chunk();
+        vector::data_chunk_t out_chunk(left_->output()->resource(), types, chunk.size());
 
         std::unordered_set<std::string> seen;
         size_t count = 0;
@@ -29,7 +28,6 @@ namespace components::operators {
                     key << "\0NULL\0";
                 } else {
                     key << static_cast<int>(val.type().type()) << ":";
-                    // Use comparison-based identity — serialize through the value's type
                     switch (val.type().to_physical_type()) {
                         case types::physical_type::INT8:
                             key << val.value<int8_t>();
@@ -83,6 +81,7 @@ namespace components::operators {
             }
         }
         out_chunk.set_cardinality(count);
+        output_ = operators::make_operator_data(left_->output()->resource(), std::move(out_chunk));
     }
 
 } // namespace components::operators

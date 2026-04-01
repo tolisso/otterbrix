@@ -1035,7 +1035,7 @@ namespace services::disk {
 
     // --- Storage data operations ---
 
-    manager_disk_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
+    manager_disk_t::unique_future<std::vector<components::vector::data_chunk_t>>
     manager_disk_t::storage_scan(session_id_t /*session*/,
                                  collection_full_name_t name,
                                  std::unique_ptr<components::table::table_filter_t> filter,
@@ -1043,15 +1043,12 @@ namespace services::disk {
                                  components::table::transaction_data txn) {
         auto* s = get_storage(name);
         if (!s) {
-            co_return nullptr;
+            co_return std::vector<components::vector::data_chunk_t>{};
         }
-        auto types = s->types();
-        auto result = std::make_unique<components::vector::data_chunk_t>(resource(), types);
-        s->scan(*result, filter.get(), limit, txn);
-        co_return std::move(result);
+        co_return s->scan_chunked(filter.get(), limit, txn);
     }
 
-    manager_disk_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
+    manager_disk_t::unique_future<std::vector<components::vector::data_chunk_t>>
     manager_disk_t::storage_scan_projected(session_id_t /*session*/,
                                            collection_full_name_t name,
                                            size_t column_limit,
@@ -1060,25 +1057,9 @@ namespace services::disk {
                                            components::table::transaction_data txn) {
         auto* s = get_storage(name);
         if (!s) {
-            co_return nullptr;
+            co_return std::vector<components::vector::data_chunk_t>{};
         }
-        auto all_types = s->types();
-        size_t n = (column_limit > 0 && column_limit < all_types.size()) ? column_limit : all_types.size();
-
-        // Build projected type list
-        std::pmr::vector<components::types::complex_logical_type> proj_types(resource());
-        proj_types.reserve(n);
-        for (size_t i = 0; i < n; i++) {
-            proj_types.push_back(all_types[i]);
-        }
-
-        // Pre-allocate to total_rows + 1 to avoid triggering a resize at the boundary
-        uint64_t total = s->total_rows();
-        uint64_t pre_cap = (limit < 0) ? total + 1 : components::vector::DEFAULT_VECTOR_CAPACITY;
-        auto result = std::make_unique<components::vector::data_chunk_t>(resource(), proj_types, pre_cap);
-        s->scan_projected(*result, filter.get(), limit, txn, n);
-
-        co_return std::move(result);
+        co_return s->scan_projected_chunked(filter.get(), limit, txn, column_limit);
     }
 
     manager_disk_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
@@ -1626,7 +1607,7 @@ namespace services::disk {
         co_return;
     }
 
-    manager_disk_empty_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
+    manager_disk_empty_t::unique_future<std::vector<components::vector::data_chunk_t>>
     manager_disk_empty_t::storage_scan(session_id_t /*session*/,
                                        collection_full_name_t name,
                                        std::unique_ptr<components::table::table_filter_t> filter,
@@ -1634,15 +1615,12 @@ namespace services::disk {
                                        components::table::transaction_data txn) {
         auto* s = get_storage(name);
         if (!s) {
-            co_return nullptr;
+            co_return std::vector<components::vector::data_chunk_t>{};
         }
-        auto types = s->types();
-        auto result = std::make_unique<components::vector::data_chunk_t>(resource(), types);
-        s->scan(*result, filter.get(), limit, txn);
-        co_return std::move(result);
+        co_return s->scan_chunked(filter.get(), limit, txn);
     }
 
-    manager_disk_empty_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
+    manager_disk_empty_t::unique_future<std::vector<components::vector::data_chunk_t>>
     manager_disk_empty_t::storage_scan_projected(session_id_t /*session*/,
                                                  collection_full_name_t name,
                                                  size_t column_limit,
@@ -1651,24 +1629,9 @@ namespace services::disk {
                                                  components::table::transaction_data txn) {
         auto* s = get_storage(name);
         if (!s) {
-            co_return nullptr;
+            co_return std::vector<components::vector::data_chunk_t>{};
         }
-        auto all_types = s->types();
-        size_t n = (column_limit > 0 && column_limit < all_types.size()) ? column_limit : all_types.size();
-
-        std::pmr::vector<components::types::complex_logical_type> proj_types(resource());
-        proj_types.reserve(n);
-        for (size_t i = 0; i < n; i++) {
-            proj_types.push_back(all_types[i]);
-        }
-
-        // Pre-allocate to total_rows + 1 to avoid triggering a resize at the boundary
-        uint64_t total = s->total_rows();
-        uint64_t pre_cap = (limit < 0) ? total + 1 : components::vector::DEFAULT_VECTOR_CAPACITY;
-        auto result = std::make_unique<components::vector::data_chunk_t>(resource(), proj_types, pre_cap);
-        s->scan_projected(*result, filter.get(), limit, txn, n);
-
-        co_return std::move(result);
+        co_return s->scan_projected_chunked(filter.get(), limit, txn, column_limit);
     }
 
     manager_disk_empty_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>

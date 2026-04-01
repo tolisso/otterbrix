@@ -392,7 +392,8 @@ namespace components::operators {
 
     void operator_group_t::on_execute_impl(pipeline::context_t* pipeline_context) {
         if (left_ && left_->output()) {
-            auto& chunk = left_->output()->data_chunk();
+            input_chunk_ = std::make_unique<vector::data_chunk_t>(left_->output()->merged());
+            auto& chunk = *input_chunk_;
 
             // Phase 1: Pre-compute arithmetic columns (before grouping)
             for (auto& comp : computed_columns_) {
@@ -453,6 +454,7 @@ namespace components::operators {
             output_ = operators::make_operator_data(left_->output()->resource(), std::move(result));
 
             // Clear temporary grouping state
+            input_chunk_.reset();
             row_ids_per_group_.clear();
             fast_group_ids_.clear();
             fast_group_ids_valid_ = false;
@@ -482,7 +484,7 @@ namespace components::operators {
     }
 
     void operator_group_t::create_list_rows() {
-        auto& chunk = left_->output()->data_chunk();
+        auto& chunk = *input_chunk_;
         auto num_rows = chunk.size();
 
         if (num_rows == 0) {
@@ -603,7 +605,7 @@ namespace components::operators {
     }
 
     vector::data_chunk_t operator_group_t::calc_aggregate_values(pipeline::context_t* pipeline_context) {
-        auto& chunk = left_->output()->data_chunk();
+        auto& chunk = *input_chunk_;
         size_t num_groups = group_keys_.size();
         size_t key_count = num_groups > 0 ? group_keys_[0].size() : 0;
         auto num_rows = chunk.size();
@@ -793,7 +795,7 @@ namespace components::operators {
     }
 
     vector::data_chunk_t operator_group_t::calc_aggregate_values_fallback(pipeline::context_t* pipeline_context) {
-        auto& chunk = left_->output()->data_chunk();
+        auto& chunk = *input_chunk_;
         size_t num_groups = group_keys_.size();
         size_t key_count = num_groups > 0 ? group_keys_[0].size() : 0;
 
@@ -876,7 +878,7 @@ namespace components::operators {
         if (num_groups > 0 && key_count > 0 && first_row_per_group_.size() == num_groups &&
             key_col_indices_.size() == key_count) {
             // Fast path: gather key columns directly from source using representative rows — no set_value loop
-            auto& src_chunk = left_->output()->data_chunk();
+            auto& src_chunk = *input_chunk_;
             vector::indexing_vector_t indexing(resource_, first_row_per_group_.data());
             for (size_t k = 0; k < key_count; k++) {
                 vector::vector_ops::copy(src_chunk.data[key_col_indices_[k]], result.data[k], indexing, num_groups, 0,

@@ -127,9 +127,9 @@ namespace components::operators {
         // Build filter from expression
         auto filter = transform_predicate(expression_, types, &ctx->parameters);
 
-        // Scan from storage
+        // Scan from storage — returns multiple chunks (one per row group)
         int limit_val = limit_.limit();
-        std::unique_ptr<components::vector::data_chunk_t> data;
+        std::vector<components::vector::data_chunk_t> chunks;
         if (column_limit_ > 0) {
             auto [_s, sf] = actor_zeta::send(ctx->disk_address,
                                              &services::disk::manager_disk_t::storage_scan_projected,
@@ -139,7 +139,7 @@ namespace components::operators {
                                              std::move(filter),
                                              limit_val,
                                              ctx->txn);
-            data = co_await std::move(sf);
+            chunks = co_await std::move(sf);
         } else {
             auto [_s, sf] = actor_zeta::send(ctx->disk_address,
                                              &services::disk::manager_disk_t::storage_scan,
@@ -148,11 +148,16 @@ namespace components::operators {
                                              std::move(filter),
                                              limit_val,
                                              ctx->txn);
-            data = co_await std::move(sf);
+            chunks = co_await std::move(sf);
         }
 
-        if (data) {
-            output_ = make_operator_data(resource_, std::move(*data));
+        if (!chunks.empty()) {
+            // Use types from first chunk
+            auto out_types = std::pmr::vector<types::complex_logical_type>(chunks[0].types());
+            output_ = make_operator_data(resource_, std::move(out_types));
+            for (auto& chunk : chunks) {
+                output_->add_chunk(std::move(chunk));
+            }
         } else {
             output_ = make_operator_data(resource_, std::pmr::vector<types::complex_logical_type>{resource_});
         }

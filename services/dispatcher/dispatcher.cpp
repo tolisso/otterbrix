@@ -627,7 +627,17 @@ namespace services::dispatcher {
                                                              components::table::table_filter_t>(nullptr),
                                                          -1,
                                                          components::table::transaction_data{0, 0});
-                                    auto main_scan = co_await std::move(smf);
+                                    auto main_scan_chunks = co_await std::move(smf);
+                                    std::unique_ptr<components::vector::data_chunk_t> main_scan;
+                                    {
+                                        size_t total = 0;
+                                        for (auto& c : main_scan_chunks) total += c.size();
+                                        if (total > 0) {
+                                            main_scan = std::make_unique<components::vector::data_chunk_t>(
+                                                resource(), main_scan_chunks[0].types(), total);
+                                            for (auto& c : main_scan_chunks) main_scan->append(c);
+                                        }
+                                    }
 
                                     std::unordered_map<int64_t, uint64_t> id_to_phys;
                                     if (main_scan && main_scan->size() > 0) {
@@ -691,7 +701,17 @@ namespace services::dispatcher {
                                                                  components::table::table_filter_t>(nullptr),
                                                              -1,
                                                              txn_data);
-                                        auto sp_mig = co_await std::move(msf);
+                                        auto sp_mig_chunks = co_await std::move(msf);
+                                        std::unique_ptr<components::vector::data_chunk_t> sp_mig;
+                                        {
+                                            size_t total = 0;
+                                            for (auto& c : sp_mig_chunks) total += c.size();
+                                            if (total > 0) {
+                                                sp_mig = std::make_unique<components::vector::data_chunk_t>(
+                                                    resource(), sp_mig_chunks[0].types(), total);
+                                                for (auto& c : sp_mig_chunks) sp_mig->append(c);
+                                            }
+                                        }
                                         if (!sp_mig || sp_mig->size() == 0) {
                                             // Nothing to migrate; still drop sparse table
                                             auto [_dse, dsef] =
@@ -864,7 +884,17 @@ namespace services::dispatcher {
                                         std::unique_ptr<components::table::table_filter_t>{nullptr},
                                         int{-1},
                                         components::table::transaction_data{0, 0});
-                                    auto sp_data = co_await std::move(ssf);
+                                    auto sp_data_chunks = co_await std::move(ssf);
+                                    std::unique_ptr<components::vector::data_chunk_t> sp_data;
+                                    {
+                                        size_t total = 0;
+                                        for (auto& c : sp_data_chunks) total += c.size();
+                                        if (total > 0) {
+                                            sp_data = std::make_unique<components::vector::data_chunk_t>(
+                                                resource(), sp_data_chunks[0].types(), total);
+                                            for (auto& c : sp_data_chunks) sp_data->append(c);
+                                        }
+                                    }
 
                                     auto col_type = sp_info.type;
                                     col_type.set_alias(sp_info.field_name);

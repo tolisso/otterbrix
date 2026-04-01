@@ -47,6 +47,29 @@ namespace components::storage {
             scan(output, filter, limit, txn);
         }
 
+        // Chunked scan: calls callback once per row group (~1024 rows). No accumulation.
+        // Default: wraps single scan() result. Override for true chunked behavior.
+        virtual std::vector<vector::data_chunk_t>
+        scan_chunked(const table::table_filter_t* filter, int limit, table::transaction_data txn) {
+            auto types_vec = types();
+            vector::data_chunk_t output(resource(), types_vec);
+            scan(output, filter, limit, txn);
+            std::vector<vector::data_chunk_t> result;
+            if (output.size() > 0) {
+                result.push_back(std::move(output));
+            }
+            return result;
+        }
+
+        // Chunked projected scan: first column_limit columns only.
+        virtual std::vector<vector::data_chunk_t>
+        scan_projected_chunked(const table::table_filter_t* filter,
+                               int limit,
+                               table::transaction_data txn,
+                               size_t /*column_limit*/) {
+            return scan_chunked(filter, limit, txn);
+        }
+
         virtual void fetch(vector::data_chunk_t& output, const vector::vector_t& row_ids, uint64_t count) = 0;
 
         virtual void scan_segment(int64_t start,

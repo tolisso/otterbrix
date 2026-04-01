@@ -557,6 +557,9 @@ namespace components::table {
 
     void row_group_t::scan_committed(collection_scan_state& state, vector::data_chunk_t& result, table_scan_type type) {
         switch (type) {
+            case table_scan_type::REGULAR:
+                templated_scan<table_scan_type::REGULAR>(state, result);
+                break;
             case table_scan_type::COMMITTED_ROWS:
                 templated_scan<table_scan_type::COMMITTED_ROWS>(state, result);
                 break;

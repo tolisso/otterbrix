@@ -125,6 +125,9 @@ namespace components::operators {
 
         void on_execute_impl(pipeline::context_t* pipeline_context) override;
 
+        // Merged input chunk (set at start of on_execute_impl, cleared at end)
+        std::unique_ptr<vector::data_chunk_t> input_chunk_;
+
         void create_list_rows();
         vector::data_chunk_t calc_aggregate_values(pipeline::context_t* pipeline_context);
         vector::data_chunk_t calc_aggregate_values_fallback(pipeline::context_t* pipeline_context);

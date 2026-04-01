@@ -22,12 +22,8 @@ namespace components::operators {
     actor_zeta::unique_future<void> transfer_scan::await_async_and_resume(pipeline::context_t* ctx) {
         int limit_val = limit_.limit();
 
-        fprintf(stderr, "[transfer_scan] column_limit_=%zu name=%s\n",
-                column_limit_, name_.to_string().c_str());
-
-        std::unique_ptr<components::vector::data_chunk_t> data;
+        std::vector<components::vector::data_chunk_t> chunks;
         if (column_limit_ > 0) {
-            // Projected scan: only first column_limit_ columns, pre-allocated
             auto [_s, sf] = actor_zeta::send(ctx->disk_address,
                                              &services::disk::manager_disk_t::storage_scan_projected,
                                              ctx->session,
@@ -36,7 +32,7 @@ namespace components::operators {
                                              std::unique_ptr<table::table_filter_t>(nullptr),
                                              limit_val,
                                              ctx->txn);
-            data = co_await std::move(sf);
+            chunks = co_await std::move(sf);
         } else {
             auto [_s, sf] = actor_zeta::send(ctx->disk_address,
                                              &services::disk::manager_disk_t::storage_scan,
@@ -45,11 +41,15 @@ namespace components::operators {
                                              std::unique_ptr<table::table_filter_t>(nullptr),
                                              limit_val,
                                              ctx->txn);
-            data = co_await std::move(sf);
+            chunks = co_await std::move(sf);
         }
 
-        if (data) {
-            output_ = make_operator_data(resource_, std::move(*data));
+        if (!chunks.empty()) {
+            auto out_types = std::pmr::vector<types::complex_logical_type>(chunks[0].types());
+            output_ = make_operator_data(resource_, std::move(out_types));
+            for (auto& chunk : chunks) {
+                output_->add_chunk(std::move(chunk));
+            }
         } else {
             output_ = make_operator_data(resource_, std::pmr::vector<types::complex_logical_type>{resource_});
         }

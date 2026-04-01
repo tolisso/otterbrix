@@ -23,11 +23,30 @@ namespace components::operators {
         std::vector<size_t> indices_right_;
 
         void on_execute_impl(pipeline::context_t* context) override;
-        void inner_join_(const predicates::predicate_ptr&, pipeline::context_t* context);
-        void outer_full_join_(const predicates::predicate_ptr&, pipeline::context_t* context);
-        void outer_left_join_(const predicates::predicate_ptr&, pipeline::context_t* context);
-        void outer_right_join_(const predicates::predicate_ptr&, pipeline::context_t* context);
-        void cross_join_(pipeline::context_t* context);
+        void inner_join_(const predicates::predicate_ptr&,
+                         const vector::data_chunk_t& left,
+                         const vector::data_chunk_t& right,
+                         vector::data_chunk_t& res,
+                         pipeline::context_t* context);
+        void outer_full_join_(const predicates::predicate_ptr&,
+                              const vector::data_chunk_t& left,
+                              const vector::data_chunk_t& right,
+                              vector::data_chunk_t& res,
+                              pipeline::context_t* context);
+        void outer_left_join_(const predicates::predicate_ptr&,
+                              const vector::data_chunk_t& left,
+                              const vector::data_chunk_t& right,
+                              vector::data_chunk_t& res,
+                              pipeline::context_t* context);
+        void outer_right_join_(const predicates::predicate_ptr&,
+                               const vector::data_chunk_t& left,
+                               const vector::data_chunk_t& right,
+                               vector::data_chunk_t& res,
+                               pipeline::context_t* context);
+        void cross_join_(const vector::data_chunk_t& left,
+                         const vector::data_chunk_t& right,
+                         vector::data_chunk_t& res,
+                         pipeline::context_t* context);
     };
 
 } // namespace components::operators

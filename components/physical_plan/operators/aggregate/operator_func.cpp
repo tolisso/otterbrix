@@ -22,7 +22,7 @@ namespace components::operators::aggregate {
     types::logical_value_t operator_func_t::aggregate_impl(pipeline::context_t* pipeline_context) {
         auto result = types::logical_value_t(std::pmr::null_memory_resource(), types::logical_type::NA);
         if (left_ && left_->output()) {
-            auto& chunk = left_->output()->data_chunk();
+            auto chunk = left_->output()->merged();
             using column_it = decltype(vector::data_chunk_t::data)::const_iterator;
             using columns_var = std::variant<column_it, types::logical_value_t>;
 

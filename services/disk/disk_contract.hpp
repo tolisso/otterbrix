@@ -90,13 +90,13 @@ namespace services::disk {
                              std::pmr::vector<components::types::complex_logical_type> types);
 
         // Storage data operations
-        actor_zeta::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
+        actor_zeta::unique_future<std::vector<components::vector::data_chunk_t>>
         storage_scan(session_id_t session,
                      collection_full_name_t name,
                      std::unique_ptr<components::table::table_filter_t> filter,
                      int limit,
                      components::table::transaction_data txn);
-        actor_zeta::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
+        actor_zeta::unique_future<std::vector<components::vector::data_chunk_t>>
         storage_scan_projected(session_id_t session,
                                collection_full_name_t name,
                                size_t column_limit,
