@@ -55,8 +55,10 @@ elseif(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -rdynamic")
 endif()
 
-# -Werror disabled on macOS (incomplete sanitizer support) and with ASAN (absl built locally has warnings)
-set(USE_Werror "$<NOT:$<OR:$<BOOL:${APPLE}>,$<BOOL:${ENABLE_ASAN}>>>")
+# We do not use -Werror flag with sanitizers for the following reasons:
+# 1) Sanitizers force us to build absl locally, which does contains warnings
+# 2) Incomplete support of macOS makes development too cumbersome with -Werror enabled
+set(USE_Werror "$<NOT:$<OR:$<BOOL:${APPLE}>,$<BOOL:${ENABLE_ASAN}>,$<BOOL:${ENABLE_UBSAN}>>>")
 
 if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
     add_compile_options(
@@ -79,6 +81,9 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
             -Wredundant-decls
             -Wsign-conversion
             -Wsign-promo
+            # GCC false positive: coroutine promise_type uses operator new(size_t, Args...)
+            # for heap elision but operator delete(void*, size_t) for normal cleanup — correct per C++20
+            $<$<CXX_COMPILER_ID:GNU>:-Wno-mismatched-new-delete>
     )
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     add_compile_options(/W4 /WX)
@@ -201,6 +206,8 @@ endif()
 if(ALLOW_BENCHMARK)
     add_subdirectory(benchmark)
 endif()
+
+add_subdirectory(JSONBench/otterbrix)
 
 
 

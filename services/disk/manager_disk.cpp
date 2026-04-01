@@ -277,6 +277,10 @@ namespace services::disk {
                 co_await actor_zeta::dispatch(this, &manager_disk_t::drop_storage, msg);
                 break;
             }
+            case actor_zeta::msg_id<manager_disk_t, &manager_disk_t::storage_add_column>: {
+                co_await actor_zeta::dispatch(this, &manager_disk_t::storage_add_column, msg);
+                break;
+            }
             // Storage queries
             case actor_zeta::msg_id<manager_disk_t, &manager_disk_t::storage_types>: {
                 co_await actor_zeta::dispatch(this, &manager_disk_t::storage_types, msg);
@@ -307,6 +311,10 @@ namespace services::disk {
                 co_await actor_zeta::dispatch(this, &manager_disk_t::storage_scan, msg);
                 break;
             }
+            case actor_zeta::msg_id<manager_disk_t, &manager_disk_t::storage_scan_projected>: {
+                co_await actor_zeta::dispatch(this, &manager_disk_t::storage_scan_projected, msg);
+                break;
+            }
             case actor_zeta::msg_id<manager_disk_t, &manager_disk_t::storage_fetch>: {
                 co_await actor_zeta::dispatch(this, &manager_disk_t::storage_fetch, msg);
                 break;
@@ -321,6 +329,10 @@ namespace services::disk {
             }
             case actor_zeta::msg_id<manager_disk_t, &manager_disk_t::storage_update>: {
                 co_await actor_zeta::dispatch(this, &manager_disk_t::storage_update, msg);
+                break;
+            }
+            case actor_zeta::msg_id<manager_disk_t, &manager_disk_t::storage_patch_column>: {
+                co_await actor_zeta::dispatch(this, &manager_disk_t::storage_patch_column, msg);
                 break;
             }
             case actor_zeta::msg_id<manager_disk_t, &manager_disk_t::storage_delete_rows>: {
@@ -947,6 +959,17 @@ namespace services::disk {
         co_return;
     }
 
+    manager_disk_t::unique_future<void>
+    manager_disk_t::storage_add_column(session_id_t /*session*/,
+                                       collection_full_name_t name,
+                                       components::table::column_definition_t new_column) {
+        auto it = storages_.find(name);
+        if (it != storages_.end()) {
+            it->second->add_column(std::move(new_column));
+        }
+        co_return;
+    }
+
     // --- Storage queries ---
 
     manager_disk_t::unique_future<std::pmr::vector<components::types::complex_logical_type>>
@@ -1012,7 +1035,7 @@ namespace services::disk {
 
     // --- Storage data operations ---
 
-    manager_disk_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
+    manager_disk_t::unique_future<std::vector<components::vector::data_chunk_t>>
     manager_disk_t::storage_scan(session_id_t /*session*/,
                                  collection_full_name_t name,
                                  std::unique_ptr<components::table::table_filter_t> filter,
@@ -1020,12 +1043,23 @@ namespace services::disk {
                                  components::table::transaction_data txn) {
         auto* s = get_storage(name);
         if (!s) {
-            co_return nullptr;
+            co_return std::vector<components::vector::data_chunk_t>{};
         }
-        auto types = s->types();
-        auto result = std::make_unique<components::vector::data_chunk_t>(resource(), types);
-        s->scan(*result, filter.get(), limit, txn);
-        co_return std::move(result);
+        co_return s->scan_chunked(filter.get(), limit, txn);
+    }
+
+    manager_disk_t::unique_future<std::vector<components::vector::data_chunk_t>>
+    manager_disk_t::storage_scan_projected(session_id_t /*session*/,
+                                           collection_full_name_t name,
+                                           size_t column_limit,
+                                           std::unique_ptr<components::table::table_filter_t> filter,
+                                           int limit,
+                                           components::table::transaction_data txn) {
+        auto* s = get_storage(name);
+        if (!s) {
+            co_return std::vector<components::vector::data_chunk_t>{};
+        }
+        co_return s->scan_projected_chunked(filter.get(), limit, txn, column_limit);
     }
 
     manager_disk_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
@@ -1074,6 +1108,7 @@ namespace services::disk {
 
         // 2. Column expansion — reorder/expand incoming data to match storage columns
         const auto& table_columns = s->columns();
+
         if (!table_columns.empty() && data->column_count() > 0) {
             std::pmr::vector<components::types::complex_logical_type> full_types(resource());
             for (const auto& col_def : table_columns) {
@@ -1122,75 +1157,14 @@ namespace services::disk {
             }
         }
 
-        // 3. Dedup — filter out rows with _id values that already exist in the table
-        if (s->total_rows() > 0) {
-            int64_t id_col = -1;
-            for (uint64_t col = 0; col < data->column_count(); col++) {
-                if (data->data[col].type().has_alias() && data->data[col].type().alias() == "_id") {
-                    id_col = static_cast<int64_t>(col);
-                    break;
-                }
-            }
-            if (id_col >= 0) {
-                auto existing = std::make_unique<components::vector::data_chunk_t>(resource(), s->types(), 0);
-                s->scan(*existing, nullptr, -1);
-
-                int64_t existing_id_col = -1;
-                for (uint64_t col = 0; col < existing->column_count(); col++) {
-                    if (existing->data[col].type().has_alias() && existing->data[col].type().alias() == "_id") {
-                        existing_id_col = static_cast<int64_t>(col);
-                        break;
-                    }
-                }
-
-                if (existing_id_col >= 0 && existing->size() > 0) {
-                    std::unordered_set<std::string> existing_ids;
-                    for (uint64_t i = 0; i < existing->size(); i++) {
-                        auto val = existing->data[static_cast<size_t>(existing_id_col)].value(i);
-                        if (!val.is_null()) {
-                            existing_ids.emplace(val.value<std::string_view>());
-                        }
-                    }
-
-                    std::vector<uint64_t> keep_rows;
-                    keep_rows.reserve(data->size());
-                    for (uint64_t i = 0; i < data->size(); i++) {
-                        auto val = data->data[static_cast<size_t>(id_col)].value(i);
-                        if (val.is_null() ||
-                            existing_ids.find(std::string(val.value<std::string_view>())) == existing_ids.end()) {
-                            keep_rows.push_back(i);
-                        }
-                    }
-
-                    if (keep_rows.empty()) {
-                        co_return std::make_pair(uint64_t{0}, uint64_t{0});
-                    }
-
-                    if (keep_rows.size() < data->size()) {
-                        auto filtered = std::make_unique<components::vector::data_chunk_t>(resource(),
-                                                                                           data->types(),
-                                                                                           keep_rows.size());
-                        for (uint64_t col = 0; col < data->column_count(); col++) {
-                            for (uint64_t i = 0; i < keep_rows.size(); i++) {
-                                auto val = data->data[col].value(keep_rows[i]);
-                                filtered->data[col].set_value(i, val);
-                            }
-                        }
-                        data = std::move(filtered);
-                    }
-                }
-            }
-        }
-
         // 4. Type promotion/conversion (numeric↔numeric, numeric↔string)
         if (s->has_schema() && !table_columns.empty()) {
             using components::types::is_numeric;
             using components::types::logical_type;
             for (size_t i = 0; i < table_columns.size() && i < data->column_count(); i++) {
-                auto src_type = data->data[i].type().type();
-                auto tgt_type = table_columns[i].type().type();
-                if (src_type != tgt_type && (is_numeric(src_type) || src_type == logical_type::STRING_LITERAL) &&
-                    (is_numeric(tgt_type) || tgt_type == logical_type::STRING_LITERAL)) {
+                auto src_type = data->data[i].type();
+                auto tgt_type = table_columns[i].type();
+                if (src_type != tgt_type && src_type.is_convertable_to(tgt_type)) {
                     auto& src_vec = data->data[i];
                     auto target_type = table_columns[i].type();
                     if (src_vec.type().has_alias()) {
@@ -1229,6 +1203,22 @@ namespace services::disk {
             co_return std::pair<int64_t, uint64_t>{0, 0};
         }
         co_return s->update(row_ids, *data, ctx.txn);
+    }
+
+    manager_disk_t::unique_future<void>
+    manager_disk_t::storage_patch_column(session_id_t /*session*/,
+                                         collection_full_name_t name,
+                                         components::vector::vector_t row_ids,
+                                         uint64_t column_idx,
+                                         std::unique_ptr<components::vector::data_chunk_t> values) {
+        auto it = storages_.find(name);
+        if (it == storages_.end() || values->size() == 0) {
+            co_return;
+        }
+        values->flatten();
+        row_ids.flatten(values->size());
+        it->second->table_storage.table().update_column(row_ids, {column_idx}, *values);
+        co_return;
     }
 
     manager_disk_t::unique_future<uint64_t>
@@ -1357,6 +1347,10 @@ namespace services::disk {
                 co_await actor_zeta::dispatch(this, &manager_disk_empty_t::drop_storage, msg);
                 break;
             }
+            case actor_zeta::msg_id<manager_disk_empty_t, &manager_disk_empty_t::storage_add_column>: {
+                co_await actor_zeta::dispatch(this, &manager_disk_empty_t::storage_add_column, msg);
+                break;
+            }
             // Storage queries
             case actor_zeta::msg_id<manager_disk_empty_t, &manager_disk_empty_t::storage_types>: {
                 co_await actor_zeta::dispatch(this, &manager_disk_empty_t::storage_types, msg);
@@ -1387,6 +1381,10 @@ namespace services::disk {
                 co_await actor_zeta::dispatch(this, &manager_disk_empty_t::storage_scan, msg);
                 break;
             }
+            case actor_zeta::msg_id<manager_disk_empty_t, &manager_disk_empty_t::storage_scan_projected>: {
+                co_await actor_zeta::dispatch(this, &manager_disk_empty_t::storage_scan_projected, msg);
+                break;
+            }
             case actor_zeta::msg_id<manager_disk_empty_t, &manager_disk_empty_t::storage_fetch>: {
                 co_await actor_zeta::dispatch(this, &manager_disk_empty_t::storage_fetch, msg);
                 break;
@@ -1401,6 +1399,10 @@ namespace services::disk {
             }
             case actor_zeta::msg_id<manager_disk_empty_t, &manager_disk_empty_t::storage_update>: {
                 co_await actor_zeta::dispatch(this, &manager_disk_empty_t::storage_update, msg);
+                break;
+            }
+            case actor_zeta::msg_id<manager_disk_empty_t, &manager_disk_empty_t::storage_patch_column>: {
+                co_await actor_zeta::dispatch(this, &manager_disk_empty_t::storage_patch_column, msg);
                 break;
             }
             case actor_zeta::msg_id<manager_disk_empty_t, &manager_disk_empty_t::storage_delete_rows>: {
@@ -1532,6 +1534,17 @@ namespace services::disk {
         co_return;
     }
 
+    manager_disk_empty_t::unique_future<void>
+    manager_disk_empty_t::storage_add_column(session_id_t /*session*/,
+                                             collection_full_name_t name,
+                                             components::table::column_definition_t new_column) {
+        auto it = storages_.find(name);
+        if (it != storages_.end()) {
+            it->second->add_column(std::move(new_column));
+        }
+        co_return;
+    }
+
     manager_disk_empty_t::unique_future<std::pmr::vector<components::types::complex_logical_type>>
     manager_disk_empty_t::storage_types(session_id_t /*session*/, collection_full_name_t name) {
         auto* s = get_storage(name);
@@ -1594,7 +1607,7 @@ namespace services::disk {
         co_return;
     }
 
-    manager_disk_empty_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
+    manager_disk_empty_t::unique_future<std::vector<components::vector::data_chunk_t>>
     manager_disk_empty_t::storage_scan(session_id_t /*session*/,
                                        collection_full_name_t name,
                                        std::unique_ptr<components::table::table_filter_t> filter,
@@ -1602,12 +1615,23 @@ namespace services::disk {
                                        components::table::transaction_data txn) {
         auto* s = get_storage(name);
         if (!s) {
-            co_return nullptr;
+            co_return std::vector<components::vector::data_chunk_t>{};
         }
-        auto types = s->types();
-        auto result = std::make_unique<components::vector::data_chunk_t>(resource(), types);
-        s->scan(*result, filter.get(), limit, txn);
-        co_return std::move(result);
+        co_return s->scan_chunked(filter.get(), limit, txn);
+    }
+
+    manager_disk_empty_t::unique_future<std::vector<components::vector::data_chunk_t>>
+    manager_disk_empty_t::storage_scan_projected(session_id_t /*session*/,
+                                                 collection_full_name_t name,
+                                                 size_t column_limit,
+                                                 std::unique_ptr<components::table::table_filter_t> filter,
+                                                 int limit,
+                                                 components::table::transaction_data txn) {
+        auto* s = get_storage(name);
+        if (!s) {
+            co_return std::vector<components::vector::data_chunk_t>{};
+        }
+        co_return s->scan_projected_chunked(filter.get(), limit, txn, column_limit);
     }
 
     manager_disk_empty_t::unique_future<std::unique_ptr<components::vector::data_chunk_t>>
@@ -1656,7 +1680,7 @@ namespace services::disk {
 
         // Column expansion
         const auto& table_columns = s->columns();
-        if (!table_columns.empty() && data->column_count() < table_columns.size()) {
+        if (!table_columns.empty() && data->column_count() > 0) {
             std::pmr::vector<components::types::complex_logical_type> full_types(resource());
             for (const auto& col_def : table_columns) {
                 full_types.push_back(col_def.type());
@@ -1676,9 +1700,8 @@ namespace services::disk {
                 if (!found) {
                     if (table_columns[t].has_default_value()) {
                         expanded_data.emplace_back(resource(), full_types[t], data->size());
-                        for (uint64_t row = 0; row < data->size(); row++) {
+                        for (uint64_t row = 0; row < data->size(); row++)
                             expanded_data.back().set_value(row, table_columns[t].default_value());
-                        }
                     } else {
                         expanded_data.emplace_back(resource(), full_types[t], data->size());
                         expanded_data.back().validity().set_all_invalid(data->size());
@@ -1701,70 +1724,15 @@ namespace services::disk {
             }
         }
 
-        // Dedup
-        if (s->total_rows() > 0) {
-            int64_t id_col = -1;
-            for (uint64_t col = 0; col < data->column_count(); col++) {
-                if (data->data[col].type().has_alias() && data->data[col].type().alias() == "_id") {
-                    id_col = static_cast<int64_t>(col);
-                    break;
-                }
-            }
-            if (id_col >= 0) {
-                auto existing = std::make_unique<components::vector::data_chunk_t>(resource(), s->types(), 0);
-                s->scan(*existing, nullptr, -1);
-                int64_t existing_id_col = -1;
-                for (uint64_t col = 0; col < existing->column_count(); col++) {
-                    if (existing->data[col].type().has_alias() && existing->data[col].type().alias() == "_id") {
-                        existing_id_col = static_cast<int64_t>(col);
-                        break;
-                    }
-                }
-                if (existing_id_col >= 0 && existing->size() > 0) {
-                    std::unordered_set<std::string> existing_ids;
-                    for (uint64_t i = 0; i < existing->size(); i++) {
-                        auto val = existing->data[static_cast<size_t>(existing_id_col)].value(i);
-                        if (!val.is_null()) {
-                            existing_ids.emplace(val.value<std::string_view>());
-                        }
-                    }
-                    std::vector<uint64_t> keep_rows;
-                    keep_rows.reserve(data->size());
-                    for (uint64_t i = 0; i < data->size(); i++) {
-                        auto val = data->data[static_cast<size_t>(id_col)].value(i);
-                        if (val.is_null() ||
-                            existing_ids.find(std::string(val.value<std::string_view>())) == existing_ids.end()) {
-                            keep_rows.push_back(i);
-                        }
-                    }
-                    if (keep_rows.empty()) {
-                        co_return std::make_pair(uint64_t{0}, uint64_t{0});
-                    }
-                    if (keep_rows.size() < data->size()) {
-                        auto filtered = std::make_unique<components::vector::data_chunk_t>(resource(),
-                                                                                           data->types(),
-                                                                                           keep_rows.size());
-                        for (uint64_t col = 0; col < data->column_count(); col++) {
-                            for (uint64_t i = 0; i < keep_rows.size(); i++) {
-                                auto val = data->data[col].value(keep_rows[i]);
-                                filtered->data[col].set_value(i, val);
-                            }
-                        }
-                        data = std::move(filtered);
-                    }
-                }
-            }
-        }
 
         // Type promotion/conversion (numeric↔numeric, numeric↔string)
         if (s->has_schema() && !table_columns.empty()) {
             using components::types::is_numeric;
             using components::types::logical_type;
             for (size_t i = 0; i < table_columns.size() && i < data->column_count(); i++) {
-                auto src_type = data->data[i].type().type();
-                auto tgt_type = table_columns[i].type().type();
-                if (src_type != tgt_type && (is_numeric(src_type) || src_type == logical_type::STRING_LITERAL) &&
-                    (is_numeric(tgt_type) || tgt_type == logical_type::STRING_LITERAL)) {
+                auto src_type = data->data[i].type();
+                auto tgt_type = table_columns[i].type();
+                if (src_type != tgt_type && src_type.is_convertable_to(tgt_type)) {
                     auto& src_vec = data->data[i];
                     auto target_type = table_columns[i].type();
                     if (src_vec.type().has_alias()) {
@@ -1797,6 +1765,22 @@ namespace services::disk {
             co_return std::pair<int64_t, uint64_t>{0, 0};
         }
         co_return s->update(row_ids, *data, ctx.txn);
+    }
+
+    manager_disk_empty_t::unique_future<void>
+    manager_disk_empty_t::storage_patch_column(session_id_t /*session*/,
+                                               collection_full_name_t name,
+                                               components::vector::vector_t row_ids,
+                                               uint64_t column_idx,
+                                               std::unique_ptr<components::vector::data_chunk_t> values) {
+        auto it = storages_.find(name);
+        if (it == storages_.end() || values->size() == 0) {
+            co_return;
+        }
+        values->flatten();
+        row_ids.flatten(values->size());
+        it->second->table_storage.table().update_column(row_ids, {column_idx}, *values);
+        co_return;
     }
 
     manager_disk_empty_t::unique_future<uint64_t>

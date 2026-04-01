@@ -2,6 +2,7 @@
 
 #include "predicates/predicate.hpp"
 #include <components/expressions/function_expression.hpp>
+#include <components/vector/vector_operations.hpp>
 
 namespace components::operators {
 
@@ -14,39 +15,57 @@ namespace components::operators {
         , limit_(limit) {}
 
     void operator_match_t::on_execute_impl(pipeline::context_t* pipeline_context) {
-        size_t count = 0;
-        if (!limit_.check(static_cast<int>(count))) {
-            return; //limit = 0
+        if (!limit_.check(0)) {
+            return; // limit = 0
         }
-        if (!left_) {
+        if (!left_ || !left_->output()) {
             return;
         }
-        if (left_->output()) {
-            const auto& chunk = left_->output()->data_chunk();
-            auto types = chunk.types();
-            output_ = operators::make_operator_data(left_->output()->resource(), types, chunk.size());
-            auto& out_chunk = output_->data_chunk();
+
+        const auto& input_chunks = left_->output()->chunks();
+        if (input_chunks.empty()) {
+            return;
+        }
+
+        auto types = left_->output()->types();
+        output_ = make_operator_data(left_->output()->resource(), types);
+
+        int matched_total = 0;
+
+        for (const auto& chunk : input_chunks) {
+            if (!limit_.check(matched_total)) {
+                break;
+            }
+
             auto predicate = expression_ ? predicates::create_predicate(left_->output()->resource(),
                                                                         pipeline_context->function_registry,
                                                                         expression_,
-                                                                        types,
-                                                                        types,
+                                                                        chunk.types(),
+                                                                        chunk.types(),
                                                                         &pipeline_context->parameters)
                                          : predicates::create_all_true_predicate(left_->output()->resource());
+
+            std::pmr::vector<uint64_t> matched(left_->output()->resource());
+            matched.reserve(chunk.size());
             for (size_t i = 0; i < chunk.size(); i++) {
                 if (predicate->check(chunk, i)) {
-                    for (size_t j = 0; j < chunk.column_count(); j++) {
-                        out_chunk.set_value(j, count, chunk.data[j].value(i));
-                    }
-                    out_chunk.row_ids.data<int64_t>()[count] = chunk.row_ids.data<int64_t>()[i];
-                    ++count;
-                    if (!limit_.check(static_cast<int>(count))) {
-                        out_chunk.set_cardinality(count);
-                        return;
+                    matched.push_back(static_cast<uint64_t>(i));
+                    if (!limit_.check(matched_total + static_cast<int>(matched.size()))) {
+                        break;
                     }
                 }
             }
-            out_chunk.set_cardinality(count);
+
+            auto count = matched.size();
+            if (count > 0) {
+                vector::data_chunk_t out_chunk(left_->output()->resource(), chunk.types(), count);
+                vector::indexing_vector_t indexing(left_->output()->resource(), matched.data());
+                chunk.copy(out_chunk, indexing, static_cast<uint64_t>(count), 0);
+                vector::vector_ops::copy(chunk.row_ids, out_chunk.row_ids, indexing, count, 0, 0);
+                out_chunk.set_cardinality(count);
+                output_->add_chunk(std::move(out_chunk));
+                matched_total += static_cast<int>(count);
+            }
         }
     }
 

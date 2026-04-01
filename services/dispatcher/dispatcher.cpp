@@ -8,17 +8,21 @@
 #include <components/logical_plan/node_create_type.hpp>
 #include <components/logical_plan/node_create_view.hpp>
 #include <components/logical_plan/node_data.hpp>
+#include <components/logical_plan/node_insert.hpp>
+#include <components/table/column_definition.hpp>
 #include <components/logical_plan/node_drop_database.hpp>
 #include <components/logical_plan/node_drop_macro.hpp>
 #include <components/logical_plan/node_drop_sequence.hpp>
 #include <components/logical_plan/node_drop_view.hpp>
 
 #include <chrono>
+#include <unordered_map>
 #include <core/executor.hpp>
 #include <core/tracy/tracy.hpp>
 #include <thread>
 
 #include <components/physical_plan_generator/create_plan.hpp>
+#include <components/planner/optimizer.hpp>
 #include <components/planner/planner.hpp>
 
 #include <services/collection/context_storage.hpp>
@@ -50,6 +54,7 @@ namespace services::dispatcher {
         , executors_(resource_ptr)
         , executor_addresses_(resource_ptr)
         , update_result_(resource_ptr)
+        , new_columns_order_(resource_ptr)
         , pending_void_(resource_ptr)
         , pending_cursor_(resource_ptr)
         , pending_size_(resource_ptr)
@@ -228,6 +233,8 @@ namespace services::dispatcher {
         params_for_wal->set_parameters(params->parameters());
 
         auto logic_plan = create_logic_plan(plan);
+        // Optimizer: constant folding, etc.
+        logic_plan = components::planner::optimize(resource(), logic_plan, &catalog_, params.get());
         table_id id(resource(), logic_plan->collection_full_name());
         cursor_t_ptr error;
         switch (logic_plan->type()) {
@@ -425,15 +432,507 @@ namespace services::dispatcher {
                 exec_result = {make_cursor(resource(), operation_status_t::success), {}};
                 break;
             }
-            default:
+            case node_type::insert_t: {
+                if (catalog_.table_computes(id)) {
+                    auto& children = logic_plan->children();
+                    if (!children.empty() && children.front()->type() == node_type::data_t) {
+                        auto data_node =
+                            boost::static_pointer_cast<node_data_t>(children.front());
+                        auto& chunk = data_node->data_chunk();
+                        auto& schema = catalog_.get_computing_table_schema(id);
+                        uint64_t row_count = chunk.size();
+                        update_result_.clear();
+
+                        if (schema.sparse_threshold() > 0) {
+                            // === Sparse path ===
+                            // 1. Get start_id from current total_rows of main table
+                            auto [_tr, trf] =
+                                actor_zeta::send(disk_address_,
+                                                 &disk::manager_disk_t::storage_total_rows,
+                                                 session,
+                                                 logic_plan->collection_full_name());
+                            uint64_t start_id = co_await std::move(trf);
+
+                            // 2. Process columns: determine sparse vs promoted
+                            struct sparse_entry_t {
+                                std::string field_name;
+                                complex_logical_type col_type;
+                                std::string phys_name;
+                                std::vector<std::pair<int64_t, logical_value_t>> id_value_pairs;
+                            };
+                            struct just_promoted_info_t {
+                                std::string field_name;
+                                complex_logical_type col_type;
+                                std::string phys_name;
+                            };
+                            std::vector<sparse_entry_t> sparse_entries;
+                            std::vector<components::vector::vector_t> promoted_cols;
+                            std::vector<just_promoted_info_t> just_promoted;
+
+                            for (auto& col : chunk.data) {
+                                std::string field_name(col.type().alias());
+                                auto field_type = col.type();
+                                field_type.set_alias("");
+
+                                std::pmr::string pmr_field(field_name.c_str(), resource());
+                                schema.append(pmr_field, field_type);
+
+                                std::string phys_name =
+                                    computed_schema::storage_column_name(field_name, field_type);
+                                std::pmr::string pmr_phys(phys_name.c_str(), resource());
+
+                                if (schema.is_sparse(pmr_phys)) {
+                                    // Collect non-null (_id, value) pairs for sparse table
+                                    sparse_entry_t entry;
+                                    entry.field_name = field_name;
+                                    entry.col_type = field_type;
+                                    entry.phys_name = phys_name;
+                                    uint64_t non_null_count = 0;
+                                    for (uint64_t row = 0; row < row_count; row++) {
+                                        if (col.validity().row_is_valid(row)) {
+                                            entry.id_value_pairs.emplace_back(
+                                                static_cast<int64_t>(start_id + row),
+                                                col.value(row));
+                                            non_null_count++;
+                                        }
+                                    }
+                                    schema.increment_non_null(pmr_phys, non_null_count);
+                                    // Check if threshold was just crossed → promotion
+                                    if (!schema.is_sparse(pmr_phys)) {
+                                        just_promoted.push_back({field_name, field_type, phys_name});
+                                    }
+                                    if (!entry.id_value_pairs.empty()) {
+                                        sparse_entries.push_back(std::move(entry));
+                                    }
+                                } else {
+                                    // Promoted column: include in main INSERT chunk
+                                    // Use original field_name (not phys_name) so SQL queries can resolve it
+                                    col.set_type_alias(field_name);
+                                    promoted_cols.push_back(std::move(col));
+                                }
+
+                                update_result_[{pmr_field, field_type}] += row_count;
+                            }
+
+                            // 2b. Add physical columns for first-seen pinned fields (before main INSERT)
+                            auto newly_pinned = schema.take_newly_pinned();
+                            for (const auto& np : newly_pinned) {
+                                auto np_type = np.type;
+                                np_type.set_alias(np.field_name);
+                                components::table::column_definition_t np_col_def(
+                                    np.field_name, np_type, false, std::nullopt);
+                                auto [_npc, npcf] =
+                                    actor_zeta::send(disk_address_,
+                                                     &disk::manager_disk_t::storage_add_column,
+                                                     session,
+                                                     logic_plan->collection_full_name(),
+                                                     np_col_def);
+                                co_await std::move(npcf);
+                            }
+
+                            // 3. Build main chunk: [_id, promoted_cols...]
+                            auto id_type = complex_logical_type(logical_type::BIGINT);
+                            id_type.set_alias("_id");
+                            chunk.data.clear();
+                            components::vector::vector_t id_vec(resource(), id_type, row_count);
+                            id_vec.sequence(static_cast<int64_t>(start_id), 1, row_count);
+                            chunk.data.push_back(std::move(id_vec));
+                            for (auto& mc : promoted_cols) {
+                                chunk.data.push_back(std::move(mc));
+                            }
+
+                            // 4a. Add physical columns for just-promoted fields (before main INSERT
+                            //     so column schema is ready; current batch still goes to sparse table)
+                            for (const auto& jp : just_promoted) {
+                                auto jp_type = jp.col_type;
+                                jp_type.set_alias(jp.field_name);
+                                components::table::column_definition_t jp_col_def(
+                                    jp.field_name, jp_type, false, std::nullopt);
+                                auto [_jac, jacf] =
+                                    actor_zeta::send(disk_address_,
+                                                     &disk::manager_disk_t::storage_add_column,
+                                                     session,
+                                                     logic_plan->collection_full_name(),
+                                                     jp_col_def);
+                                co_await std::move(jacf);
+                            }
+
+                            // 4. Execute main INSERT
+                            exec_result = co_await execute_plan_impl(session,
+                                                                     logic_plan,
+                                                                     params->take_parameters(),
+                                                                     txn_data);
+
+                            // 5. Append to sparse tables (only if main INSERT succeeded)
+                            if (exec_result.cursor->is_success()) {
+                                for (auto& entry : sparse_entries) {
+                                    std::string sp_coll_str = computed_schema::sparse_table_name(
+                                        std::string(logic_plan->collection_name()),
+                                        entry.field_name,
+                                        entry.col_type);
+                                    collection_full_name_t sp_name(logic_plan->database_name(),
+                                                                   sp_coll_str);
+
+                                    // Create sparse storage if it doesn't exist yet (idempotent)
+                                    auto [_csp, cspf] =
+                                        actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::create_storage,
+                                                         session,
+                                                         sp_name);
+                                    co_await std::move(cspf);
+
+                                    // Build sparse chunk: [_id BIGINT, value TYPE]
+                                    uint64_t sp_count = entry.id_value_pairs.size();
+                                    auto sp_id_type = complex_logical_type(logical_type::BIGINT);
+                                    sp_id_type.set_alias("_id");
+                                    auto sp_val_type = entry.col_type;
+                                    sp_val_type.set_alias(entry.phys_name);
+
+                                    std::pmr::vector<complex_logical_type> sp_types(resource());
+                                    sp_types.push_back(sp_id_type);
+                                    sp_types.push_back(sp_val_type);
+
+                                    auto sp_chunk = std::make_unique<components::vector::data_chunk_t>(
+                                        resource(), sp_types, sp_count);
+                                    sp_chunk->set_cardinality(sp_count);
+
+                                    for (uint64_t i = 0; i < sp_count; i++) {
+                                        auto id_val = logical_value_t::create_numeric(
+                                            resource(),
+                                            complex_logical_type(logical_type::BIGINT),
+                                            entry.id_value_pairs[i].first);
+                                        sp_chunk->data[0].set_value(i, id_val);
+                                        sp_chunk->data[1].set_value(i, entry.id_value_pairs[i].second);
+                                    }
+
+                                    components::execution_context_t sp_ctx{session, txn_data, sp_name};
+                                    auto [_sa, saf] =
+                                        actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_append,
+                                                         sp_ctx,
+                                                         std::move(sp_chunk));
+                                    co_await std::move(saf);
+                                }
+
+                                // 6. Migrate just-promoted columns: sparse table → main table column
+                                if (!just_promoted.empty()) {
+                                    // Scan main table (no MVCC filter) to build _id → physical_position map.
+                                    // txn={0,0} returns all rows in physical order so scan_index == phys_pos.
+                                    auto [_sm, smf] =
+                                        actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_scan,
+                                                         session,
+                                                         logic_plan->collection_full_name(),
+                                                         std::unique_ptr<
+                                                             components::table::table_filter_t>(nullptr),
+                                                         -1,
+                                                         components::table::transaction_data{0, 0});
+                                    auto main_scan_chunks = co_await std::move(smf);
+                                    std::unique_ptr<components::vector::data_chunk_t> main_scan;
+                                    {
+                                        size_t total = 0;
+                                        for (auto& c : main_scan_chunks) total += c.size();
+                                        if (total > 0) {
+                                            main_scan = std::make_unique<components::vector::data_chunk_t>(
+                                                resource(), main_scan_chunks[0].types(), total);
+                                            for (auto& c : main_scan_chunks) main_scan->append(c);
+                                        }
+                                    }
+
+                                    std::unordered_map<int64_t, uint64_t> id_to_phys;
+                                    if (main_scan && main_scan->size() > 0) {
+                                        int main_id_col = -1;
+                                        for (uint64_t c = 0; c < main_scan->column_count(); c++) {
+                                            if (main_scan->data[c].type().has_alias() &&
+                                                main_scan->data[c].type().alias() == "_id") {
+                                                main_id_col = static_cast<int>(c);
+                                                break;
+                                            }
+                                        }
+                                        if (main_id_col >= 0) {
+                                            for (uint64_t r = 0; r < main_scan->size(); r++) {
+                                                if (main_scan->data[static_cast<size_t>(main_id_col)]
+                                                        .validity()
+                                                        .row_is_valid(r)) {
+                                                    auto id_val = main_scan->data[static_cast<size_t>(main_id_col)]
+                                                                      .value(r)
+                                                                      .value<int64_t>();
+                                                    id_to_phys[id_val] = r;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Get current main table columns to find each promoted column's index
+                                    auto [_gc, gcf] =
+                                        actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_columns,
+                                                         session,
+                                                         logic_plan->collection_full_name());
+                                    auto main_cols = co_await std::move(gcf);
+
+                                    for (const auto& jp : just_promoted) {
+                                        // Find the physical column index (column was added with field_name)
+                                        uint64_t col_idx = 0;
+                                        bool found = false;
+                                        for (uint64_t ci = 0; ci < main_cols.size(); ci++) {
+                                            if (main_cols[ci].name() == jp.field_name) {
+                                                col_idx = ci;
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!found)
+                                            continue;
+
+                                        // Scan entire sparse table (includes current batch)
+                                        std::string sp_mig_str = computed_schema::sparse_table_name(
+                                            std::string(logic_plan->collection_name()),
+                                            jp.field_name,
+                                            jp.col_type);
+                                        collection_full_name_t sp_mig_name(logic_plan->database_name(),
+                                                                            sp_mig_str);
+                                        auto [_ms, msf] =
+                                            actor_zeta::send(disk_address_,
+                                                             &disk::manager_disk_t::storage_scan,
+                                                             session,
+                                                             sp_mig_name,
+                                                             std::unique_ptr<
+                                                                 components::table::table_filter_t>(nullptr),
+                                                             -1,
+                                                             txn_data);
+                                        auto sp_mig_chunks = co_await std::move(msf);
+                                        std::unique_ptr<components::vector::data_chunk_t> sp_mig;
+                                        {
+                                            size_t total = 0;
+                                            for (auto& c : sp_mig_chunks) total += c.size();
+                                            if (total > 0) {
+                                                sp_mig = std::make_unique<components::vector::data_chunk_t>(
+                                                    resource(), sp_mig_chunks[0].types(), total);
+                                                for (auto& c : sp_mig_chunks) sp_mig->append(c);
+                                            }
+                                        }
+                                        if (!sp_mig || sp_mig->size() == 0) {
+                                            // Nothing to migrate; still drop sparse table
+                                            auto [_dse, dsef] =
+                                                actor_zeta::send(disk_address_,
+                                                                 &disk::manager_disk_t::drop_storage,
+                                                                 session,
+                                                                 sp_mig_name);
+                                            co_await std::move(dsef);
+                                            continue;
+                                        }
+
+                                        // Join sparse rows to main table by _id → physical_position
+                                        auto val_type = jp.col_type;
+                                        val_type.set_alias(jp.field_name);
+                                        std::pmr::vector<complex_logical_type> val_types(resource());
+                                        val_types.push_back(val_type);
+
+                                        std::vector<std::pair<uint64_t, logical_value_t>> patch_pairs;
+                                        for (uint64_t r = 0; r < sp_mig->size(); r++) {
+                                            if (!sp_mig->data[0].validity().row_is_valid(r))
+                                                continue;
+                                            if (!sp_mig->data[1].validity().row_is_valid(r))
+                                                continue;
+                                            int64_t sp_id =
+                                                sp_mig->data[0].value(r).value<int64_t>();
+                                            auto it = id_to_phys.find(sp_id);
+                                            if (it == id_to_phys.end())
+                                                continue; // row deleted from main table
+                                            patch_pairs.emplace_back(it->second,
+                                                                      sp_mig->data[1].value(r));
+                                        }
+
+                                        if (!patch_pairs.empty()) {
+                                            uint64_t mig_count = patch_pairs.size();
+                                            auto rid_type = complex_logical_type(logical_type::BIGINT);
+                                            components::vector::vector_t patch_ids(resource(),
+                                                                                   rid_type,
+                                                                                   mig_count);
+                                            auto patch_vals =
+                                                std::make_unique<components::vector::data_chunk_t>(
+                                                    resource(), val_types, mig_count);
+                                            patch_vals->set_cardinality(mig_count);
+
+                                            for (uint64_t r = 0; r < mig_count; r++) {
+                                                auto phys_val = logical_value_t::create_numeric(
+                                                    resource(),
+                                                    complex_logical_type(logical_type::BIGINT),
+                                                    static_cast<int64_t>(patch_pairs[r].first));
+                                                patch_ids.set_value(r, phys_val);
+                                                patch_vals->data[0].set_value(r, patch_pairs[r].second);
+                                            }
+
+                                            // Patch the promoted column in the main table
+                                            auto [_pc, pcf] =
+                                                actor_zeta::send(disk_address_,
+                                                                 &disk::manager_disk_t::storage_patch_column,
+                                                                 session,
+                                                                 logic_plan->collection_full_name(),
+                                                                 std::move(patch_ids),
+                                                                 col_idx,
+                                                                 std::move(patch_vals));
+                                            co_await std::move(pcf);
+                                        }
+
+                                        // Drop the now-migrated sparse table
+                                        auto [_dsp, dspf] =
+                                            actor_zeta::send(disk_address_,
+                                                             &disk::manager_disk_t::drop_storage,
+                                                             session,
+                                                             sp_mig_name);
+                                        co_await std::move(dspf);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+
+                        // === Non-sparse path ===
+                        for (auto& col : chunk.data) {
+                            auto field_name = col.type().alias();
+                            auto field_type = col.type();
+
+                            std::pmr::string pmr_field(field_name.c_str(), resource());
+                            if (!schema.has_type(pmr_field, field_type)) {
+                                // New (field_name, type) pair — add physical column to storage
+                                std::string phys_name =
+                                    computed_schema::storage_column_name(field_name, field_type);
+                                components::table::column_definition_t col_def(
+                                    phys_name,
+                                    field_type,
+                                    false,
+                                    std::nullopt);
+                                auto [_ac, acf] = actor_zeta::send(disk_address_,
+                                                                   &disk::manager_disk_t::storage_add_column,
+                                                                   session,
+                                                                   logic_plan->collection_full_name(),
+                                                                   col_def);
+                                co_await std::move(acf);
+                            }
+
+                            // Append to schema in INSERT column order so that column_order_ matches
+                            // physical storage column order. append() deduplicates, so repeated calls
+                            // for the same (field, type) are no-ops that preserve the original ordering.
+                            schema.append(pmr_field, field_type);
+
+                            // Rename alias to physical column name so storage_append can match by name
+                            std::string phys_name =
+                                computed_schema::storage_column_name(field_name, field_type);
+                            col.set_type_alias(phys_name);
+
+                            // Track for computed_schema refcount update after successful INSERT
+                            update_result_[{std::pmr::string(field_name.c_str(), resource()), field_type}] +=
+                                row_count;
+                        }
+                    }
+                }
                 exec_result = co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
                 break;
+            }
+            default: {
+                exec_result = co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
+
+                // Post-process: merge sparse columns into SELECT results for computing tables
+                if (exec_result.cursor->is_success() && catalog_.table_computes(id)) {
+                    auto& schema = catalog_.get_computing_table_schema(id);
+                    if (schema.sparse_threshold() > 0 && schema.has_any_sparse()) {
+                        auto sparse_cols = schema.sparse_columns();
+                        if (!sparse_cols.empty()) {
+                            auto& result_chunk = exec_result.cursor->chunk_data();
+                            uint64_t n_rows = result_chunk.size();
+
+                            // Find _id column index
+                            int id_col_idx = -1;
+                            for (size_t c = 0; c < result_chunk.column_count(); c++) {
+                                if (result_chunk.data[c].type().has_alias() &&
+                                    result_chunk.data[c].type().alias() == "_id") {
+                                    id_col_idx = static_cast<int>(c);
+                                    break;
+                                }
+                            }
+
+                            if (id_col_idx >= 0 && n_rows > 0) {
+                                // Build _id -> row_idx lookup map
+                                std::unordered_map<int64_t, uint64_t> id_to_row;
+                                id_to_row.reserve(n_rows);
+                                for (uint64_t row = 0; row < n_rows; row++) {
+                                    if (result_chunk.data[static_cast<size_t>(id_col_idx)]
+                                            .validity()
+                                            .row_is_valid(row)) {
+                                        auto id_val =
+                                            result_chunk.data[static_cast<size_t>(id_col_idx)].value(row);
+                                        id_to_row[id_val.value<int64_t>()] = row;
+                                    }
+                                }
+
+                                // Scan each sparse table and add a column vector to the result
+                                for (const auto& sp_info : sparse_cols) {
+                                    std::string sp_coll_str = computed_schema::sparse_table_name(
+                                        std::string(logic_plan->collection_name()),
+                                        sp_info.field_name,
+                                        sp_info.type);
+                                    collection_full_name_t sp_coll(logic_plan->database_name(),
+                                                                   sp_coll_str);
+
+                                    auto [_ss, ssf] = actor_zeta::send(
+                                        disk_address_,
+                                        &disk::manager_disk_t::storage_scan,
+                                        session,
+                                        sp_coll,
+                                        std::unique_ptr<components::table::table_filter_t>{nullptr},
+                                        int{-1},
+                                        components::table::transaction_data{0, 0});
+                                    auto sp_data_chunks = co_await std::move(ssf);
+                                    std::unique_ptr<components::vector::data_chunk_t> sp_data;
+                                    {
+                                        size_t total = 0;
+                                        for (auto& c : sp_data_chunks) total += c.size();
+                                        if (total > 0) {
+                                            sp_data = std::make_unique<components::vector::data_chunk_t>(
+                                                resource(), sp_data_chunks[0].types(), total);
+                                            for (auto& c : sp_data_chunks) sp_data->append(c);
+                                        }
+                                    }
+
+                                    auto col_type = sp_info.type;
+                                    col_type.set_alias(sp_info.field_name);
+                                    components::vector::vector_t new_col(resource(), col_type, n_rows);
+                                    new_col.validity().set_all_invalid(n_rows);
+
+                                    if (sp_data && sp_data->size() > 0) {
+                                        // sparse table layout: [_id BIGINT, value TYPE]
+                                        for (uint64_t sp_row = 0; sp_row < sp_data->size(); sp_row++) {
+                                            if (!sp_data->data[0].validity().row_is_valid(sp_row)) {
+                                                continue;
+                                            }
+                                            int64_t sp_id =
+                                                sp_data->data[0].value(sp_row).value<int64_t>();
+                                            auto it = id_to_row.find(sp_id);
+                                            if (it != id_to_row.end() &&
+                                                sp_data->data[1].validity().row_is_valid(sp_row)) {
+                                                new_col.set_value(it->second,
+                                                                  sp_data->data[1].value(sp_row));
+                                            }
+                                        }
+                                    }
+                                    result_chunk.data.push_back(std::move(new_col));
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+            }
         }
 
         auto& result = exec_result.cursor;
         trace(log_, "manager_dispatcher_t::execute_plan: result received, success: {}", result->is_success());
 
-        if (!exec_result.updates.empty()) {
+        // For computed-schema INSERT, update_result_ was pre-populated in the insert_t case;
+        // don't overwrite it. For other DML (DELETE), exec_result.updates carries the data.
+        if (!exec_result.updates.empty() && logic_plan->type() != node_type::insert_t) {
             update_result_ = exec_result.updates;
         }
 
@@ -504,6 +1003,22 @@ namespace services::dispatcher {
                                                            session,
                                                            logic_plan->collection_full_name());
                         co_await std::move(csf);
+                        // For sparse tables: add _id BIGINT column as the first physical column
+                        if (create_collection->sparse_threshold() > 0) {
+                            auto id_bigint_type = complex_logical_type(logical_type::BIGINT);
+                            id_bigint_type.set_alias("_id");
+                            components::table::column_definition_t id_col(
+                                "_id",
+                                id_bigint_type,
+                                false,
+                                std::nullopt);
+                            auto [_ai, aif] = actor_zeta::send(disk_address_,
+                                                               &disk::manager_disk_t::storage_add_column,
+                                                               session,
+                                                               logic_plan->collection_full_name(),
+                                                               id_col);
+                            co_await std::move(aif);
+                        }
                     } else {
                         std::vector<components::table::column_definition_t> storage_columns =
                             create_collection->column_definitions();
@@ -867,6 +1382,17 @@ namespace services::dispatcher {
             }
         }
 
+        // Populate index metadata for optimizer-driven index selection
+        if (index_address_ != actor_zeta::address_t::empty_address()) {
+            auto coll = logical_plan->collection_full_name();
+            if (!coll.empty()) {
+                auto [_ik, ikf] =
+                    actor_zeta::send(index_address_, &index::manager_index_t::get_indexed_keys, session, coll);
+                collections_context_storage.indexed_keys = co_await std::move(ikf);
+            }
+        }
+        collections_context_storage.parameters = &parameters;
+
         assert(!executors_.empty());
         auto pool_idx = collection_name_hash{}(logical_plan->collection_full_name()) % executors_.size();
         trace(log_, "manager_dispatcher_t:execute_plan_impl: calling executor[{}]", pool_idx);
@@ -915,7 +1441,7 @@ namespace services::dispatcher {
 
     node_ptr manager_dispatcher_t::create_logic_plan(node_ptr plan) {
         components::planner::planner_t planner;
-        return planner.create_plan(resource(), std::move(plan));
+        return planner.create_plan(resource(), std::move(plan), &catalog_);
     }
 
     void manager_dispatcher_t::update_catalog(node_ptr node) {
@@ -930,7 +1456,14 @@ namespace services::dispatcher {
             case node_type::create_collection_t: {
                 auto node_info = boost::polymorphic_pointer_downcast<node_create_collection_t>(node);
                 if (node_info->column_definitions().empty()) {
-                    auto err = catalog_.create_computing_table(id);
+                    catalog_error err;
+                    if (!node_info->pinned_columns().empty()) {
+                        err = catalog_.create_computing_table(id,
+                                                              node_info->sparse_threshold(),
+                                                              node_info->pinned_columns());
+                    } else {
+                        err = catalog_.create_computing_table(id, node_info->sparse_threshold());
+                    }
                     assert(!err);
                 } else {
                     auto types = node_info->schema();
@@ -952,41 +1485,11 @@ namespace services::dispatcher {
                     catalog_.drop_computing_table(id);
                 }
                 break;
-            case node_type::insert_t: {
-                if (catalog_.table_computes(id)) {
-                    // try to replace computed_schema with a fixed one
-                    for (const auto& child : node->children()) {
-                        if (child->type() == node_type::data_t) {
-                            auto* data_node = static_cast<const node_data_t*>(child.get());
-                            std::vector<components::table::column_definition_t> columns;
-                            std::vector<field_description> desc;
-                            columns.reserve(data_node->data_chunk().column_count());
-                            desc.reserve(data_node->data_chunk().column_count());
-                            for (size_t i = 0; i < data_node->data_chunk().column_count(); desc.emplace_back(i++)) {
-                                const auto& type = data_node->data_chunk().data[i].type();
-                                // TODO: figure out behaviour for unnamed type
-                                assert(type.has_alias());
-                                columns.emplace_back(type.alias(), type);
-                            }
-                            catalog_.drop_computing_table(id);
-                            auto sch = schema(resource(), std::move(columns), std::move(desc));
-                            auto err = catalog_.create_table(id, table_metadata(resource(), std::move(sch)));
-                            assert(!err);
-                        }
-                    }
-                }
+            case node_type::insert_t:
                 break;
-            }
-            case node_type::delete_t: {
-                if (catalog_.table_computes(id)) {
-                    auto& sch = catalog_.get_computing_table_schema(id);
-                    for (const auto& [name_type, refcount] : update_result_) {
-                        sch.drop_n(std::pmr::string(name_type.first, resource()), name_type.second, refcount);
-                    }
-                    update_result_.clear();
-                }
+            case node_type::delete_t:
+                update_result_.clear();
                 break;
-            }
             default:
                 break;
         }

@@ -16,8 +16,8 @@ namespace components::operators {
         // await_async_and_resume via send(disk_address_, &manager_disk_t::storage_delete_rows).
         if (left_ && left_->output() && right_ && right_->output()) {
             modified_ = operators::make_operator_write_data(left_->output()->resource());
-            auto& chunk_left = left_->output()->data_chunk();
-            auto& chunk_right = right_->output()->data_chunk();
+            auto chunk_left = left_->output()->merged();
+            auto chunk_right = right_->output()->merged();
             auto types_left = chunk_left.types();
             auto types_right = chunk_right.types();
             auto ids_capacity = vector::DEFAULT_VECTOR_CAPACITY;
@@ -52,7 +52,7 @@ namespace components::operators {
             }
         } else if (left_ && left_->output()) {
             modified_ = operators::make_operator_write_data(left_->output()->resource());
-            auto& chunk = left_->output()->data_chunk();
+            auto chunk = left_->output()->merged();
             auto types = chunk.types();
 
             vector::vector_t ids(left_->output()->resource(), types::logical_type::BIGINT, chunk.size());

@@ -1,5 +1,6 @@
 #pragma once
 #include "column_data.hpp"
+#include <optional>
 #include "row_version_manager.hpp"
 #include "storage/data_pointer.hpp"
 
@@ -44,7 +45,7 @@ namespace components::table {
         // collection_scan_state &scan_state, vector::data_chunk_t &scan_chunk);
         std::unique_ptr<row_group_t> add_column(collection_t* collection,
                                                 column_definition_t& new_column,
-                                                const types::logical_value_t& default_value,
+                                                const std::optional<types::logical_value_t>& default_value,
                                                 vector::vector_t& intermediate);
         std::unique_ptr<row_group_t> remove_column(collection_t* collection, uint64_t removed_column);
 
@@ -53,6 +54,7 @@ namespace components::table {
         bool initialize_scan(collection_scan_state& state);
         bool initialize_scan_with_offset(collection_scan_state& state, uint64_t vector_offset);
         bool check_zonemap_segments(collection_scan_state& state);
+        filter_propagate_result_t check_zonemap_filter(const table_filter_t* f);
         void scan(collection_scan_state& state, vector::data_chunk_t& result);
         void scan_committed(collection_scan_state& state, vector::data_chunk_t& result, table_scan_type type);
 
@@ -124,6 +126,13 @@ namespace components::table {
                              vector::indexing_vector_t& indexing,
                              const table_filter_t* filter,
                              uint64_t& approved_tuple_count);
+
+        void filter_indexing_vectorized(std::pmr::memory_resource* resource,
+                                        uint64_t vector_index,
+                                        uint64_t max_count,
+                                        vector::indexing_vector_t& indexing,
+                                        const table_filter_t* filter,
+                                        uint64_t& approved_tuple_count);
 
         template<table_scan_type TYPE>
         void templated_scan(collection_scan_state& state, vector::data_chunk_t& result);

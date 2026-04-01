@@ -18,14 +18,14 @@ namespace components::operators {
             return;
         }
         if (left_->output() && right_->output()) {
-            const auto& chunk_left = left_->output()->data_chunk();
-            const auto& chunk_right = right_->output()->data_chunk();
+            auto chunk_left = left_->output()->merged();
+            auto chunk_right = right_->output()->merged();
 
             auto res_types = chunk_left.types();
             auto right_types = chunk_right.types();
             res_types.insert(res_types.end(), right_types.begin(), right_types.end());
 
-            output_ = operators::make_operator_data(left_->output()->resource(), res_types);
+            vector::data_chunk_t chunk_res(left_->output()->resource(), res_types);
 
             if (log_.is_valid()) {
                 trace(log(), "operator_join::left_size(): {}", chunk_left.size());
@@ -49,39 +49,41 @@ namespace components::operators {
                                                                         chunk_left.types(),
                                                                         chunk_right.types(),
                                                                         &context->parameters)
-                                         : predicates::create_all_true_predicate(output_->resource());
+                                         : predicates::create_all_true_predicate(left_->output()->resource());
 
             switch (join_type_) {
                 case type::inner:
-                    inner_join_(predicate, context);
+                    inner_join_(predicate, chunk_left, chunk_right, chunk_res, context);
                     break;
                 case type::full:
-                    outer_full_join_(predicate, context);
+                    outer_full_join_(predicate, chunk_left, chunk_right, chunk_res, context);
                     break;
                 case type::left:
-                    outer_left_join_(predicate, context);
+                    outer_left_join_(predicate, chunk_left, chunk_right, chunk_res, context);
                     break;
                 case type::right:
-                    outer_right_join_(predicate, context);
+                    outer_right_join_(predicate, chunk_left, chunk_right, chunk_res, context);
                     break;
                 case type::cross:
-                    cross_join_(context);
+                    cross_join_(chunk_left, chunk_right, chunk_res, context);
                     break;
                 default:
                     break;
             }
 
             if (log_.is_valid()) {
-                trace(log(), "operator_join::result_size(): {}", output_->size());
+                trace(log(), "operator_join::result_size(): {}", chunk_res.size());
             }
+
+            output_ = operators::make_operator_data(left_->output()->resource(), std::move(chunk_res));
         }
     }
 
-    void operator_join_t::inner_join_(const predicates::predicate_ptr& predicate, pipeline::context_t*) {
-        const auto& chunk_left = left_->output()->data_chunk();
-        const auto& chunk_right = right_->output()->data_chunk();
-        auto& chunk_res = output_->data_chunk();
-
+    void operator_join_t::inner_join_(const predicates::predicate_ptr& predicate,
+                                      const vector::data_chunk_t& chunk_left,
+                                      const vector::data_chunk_t& chunk_right,
+                                      vector::data_chunk_t& chunk_res,
+                                      pipeline::context_t*) {
         std::vector<uint64_t> copy_indices_left;
         std::vector<uint64_t> copy_indices_right;
 
@@ -97,33 +99,23 @@ namespace components::operators {
         }
 
         vector::validate_chunk_capacity(chunk_res, res_count);
-        vector::indexing_vector_t left_indexing(output_->resource(), copy_indices_left.data());
-        vector::indexing_vector_t right_indexing(output_->resource(), copy_indices_right.data());
+        vector::indexing_vector_t left_indexing(resource_, copy_indices_left.data());
+        vector::indexing_vector_t right_indexing(resource_, copy_indices_right.data());
         for (size_t i = 0; i < chunk_left.column_count(); i++) {
-            vector::vector_ops::copy(chunk_left.data[i],
-                                     chunk_res.data[indices_left_.at(i)],
-                                     left_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_left.data[i], chunk_res.data[indices_left_.at(i)], left_indexing, res_count, 0, 0);
         }
         for (size_t i = 0; i < chunk_right.column_count(); i++) {
-            vector::vector_ops::copy(chunk_right.data[i],
-                                     chunk_res.data[indices_right_.at(i)],
-                                     right_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_right.data[i], chunk_res.data[indices_right_.at(i)], right_indexing, res_count, 0, 0);
         }
         chunk_res.set_cardinality(res_count);
     }
 
-    void operator_join_t::outer_full_join_(const predicates::predicate_ptr& predicate, pipeline::context_t*) {
-        const auto& chunk_left = left_->output()->data_chunk();
-        const auto& chunk_right = right_->output()->data_chunk();
-        auto& chunk_res = output_->data_chunk();
-
-        std::vector<bool> visited_right(right_->output()->size(), false);
+    void operator_join_t::outer_full_join_(const predicates::predicate_ptr& predicate,
+                                           const vector::data_chunk_t& chunk_left,
+                                           const vector::data_chunk_t& chunk_right,
+                                           vector::data_chunk_t& chunk_res,
+                                           pipeline::context_t*) {
+        std::vector<bool> visited_right(chunk_right.size(), false);
         std::vector<uint64_t> copy_indices_left;
         std::vector<uint64_t> copy_indices_right;
         std::vector<uint64_t> null_right_positions;
@@ -159,26 +151,16 @@ namespace components::operators {
         }
 
         vector::validate_chunk_capacity(chunk_res, res_count);
-        vector::indexing_vector_t left_indexing(output_->resource(), copy_indices_left.data());
-        vector::indexing_vector_t right_indexing(output_->resource(), copy_indices_right.data());
+        vector::indexing_vector_t left_indexing(resource_, copy_indices_left.data());
+        vector::indexing_vector_t right_indexing(resource_, copy_indices_right.data());
         for (size_t i = 0; i < chunk_left.column_count(); i++) {
-            vector::vector_ops::copy(chunk_left.data[i],
-                                     chunk_res.data[indices_left_.at(i)],
-                                     left_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_left.data[i], chunk_res.data[indices_left_.at(i)], left_indexing, res_count, 0, 0);
             for (auto pos : null_left_positions) {
                 chunk_res.data[indices_left_.at(i)].validity().set_invalid(pos);
             }
         }
         for (size_t i = 0; i < chunk_right.column_count(); i++) {
-            vector::vector_ops::copy(chunk_right.data[i],
-                                     chunk_res.data[indices_right_.at(i)],
-                                     right_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_right.data[i], chunk_res.data[indices_right_.at(i)], right_indexing, res_count, 0, 0);
             for (auto pos : null_right_positions) {
                 chunk_res.data[indices_right_.at(i)].validity().set_invalid(pos);
             }
@@ -186,11 +168,11 @@ namespace components::operators {
         chunk_res.set_cardinality(res_count);
     }
 
-    void operator_join_t::outer_left_join_(const predicates::predicate_ptr& predicate, pipeline::context_t*) {
-        const auto& chunk_left = left_->output()->data_chunk();
-        const auto& chunk_right = right_->output()->data_chunk();
-        auto& chunk_res = output_->data_chunk();
-
+    void operator_join_t::outer_left_join_(const predicates::predicate_ptr& predicate,
+                                           const vector::data_chunk_t& chunk_left,
+                                           const vector::data_chunk_t& chunk_right,
+                                           vector::data_chunk_t& chunk_res,
+                                           pipeline::context_t*) {
         std::vector<uint64_t> copy_indices_left;
         std::vector<uint64_t> copy_indices_right;
         std::vector<uint64_t> null_right_positions;
@@ -215,23 +197,13 @@ namespace components::operators {
         }
 
         vector::validate_chunk_capacity(chunk_res, res_count);
-        vector::indexing_vector_t left_indexing(output_->resource(), copy_indices_left.data());
-        vector::indexing_vector_t right_indexing(output_->resource(), copy_indices_right.data());
+        vector::indexing_vector_t left_indexing(resource_, copy_indices_left.data());
+        vector::indexing_vector_t right_indexing(resource_, copy_indices_right.data());
         for (size_t i = 0; i < chunk_left.column_count(); i++) {
-            vector::vector_ops::copy(chunk_left.data[i],
-                                     chunk_res.data[indices_left_.at(i)],
-                                     left_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_left.data[i], chunk_res.data[indices_left_.at(i)], left_indexing, res_count, 0, 0);
         }
         for (size_t i = 0; i < chunk_right.column_count(); i++) {
-            vector::vector_ops::copy(chunk_right.data[i],
-                                     chunk_res.data[indices_right_.at(i)],
-                                     right_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_right.data[i], chunk_res.data[indices_right_.at(i)], right_indexing, res_count, 0, 0);
             for (auto pos : null_right_positions) {
                 chunk_res.data[indices_right_.at(i)].validity().set_invalid(pos);
             }
@@ -239,11 +211,11 @@ namespace components::operators {
         chunk_res.set_cardinality(res_count);
     }
 
-    void operator_join_t::outer_right_join_(const predicates::predicate_ptr& predicate, pipeline::context_t*) {
-        const auto& chunk_left = left_->output()->data_chunk();
-        const auto& chunk_right = right_->output()->data_chunk();
-        auto& chunk_res = output_->data_chunk();
-
+    void operator_join_t::outer_right_join_(const predicates::predicate_ptr& predicate,
+                                            const vector::data_chunk_t& chunk_left,
+                                            const vector::data_chunk_t& chunk_right,
+                                            vector::data_chunk_t& chunk_res,
+                                            pipeline::context_t*) {
         std::vector<uint64_t> copy_indices_left;
         std::vector<uint64_t> copy_indices_right;
         std::vector<uint64_t> null_left_positions;
@@ -268,35 +240,24 @@ namespace components::operators {
         }
 
         vector::validate_chunk_capacity(chunk_res, res_count);
-        vector::indexing_vector_t left_indexing(output_->resource(), copy_indices_left.data());
-        vector::indexing_vector_t right_indexing(output_->resource(), copy_indices_right.data());
+        vector::indexing_vector_t left_indexing(resource_, copy_indices_left.data());
+        vector::indexing_vector_t right_indexing(resource_, copy_indices_right.data());
         for (size_t i = 0; i < chunk_left.column_count(); i++) {
-            vector::vector_ops::copy(chunk_left.data[i],
-                                     chunk_res.data[indices_left_.at(i)],
-                                     left_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_left.data[i], chunk_res.data[indices_left_.at(i)], left_indexing, res_count, 0, 0);
             for (auto pos : null_left_positions) {
                 chunk_res.data[indices_left_.at(i)].validity().set_invalid(pos);
             }
         }
         for (size_t i = 0; i < chunk_right.column_count(); i++) {
-            vector::vector_ops::copy(chunk_right.data[i],
-                                     chunk_res.data[indices_right_.at(i)],
-                                     right_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_right.data[i], chunk_res.data[indices_right_.at(i)], right_indexing, res_count, 0, 0);
         }
         chunk_res.set_cardinality(res_count);
     }
 
-    void operator_join_t::cross_join_(pipeline::context_t*) {
-        const auto& chunk_left = left_->output()->data_chunk();
-        const auto& chunk_right = right_->output()->data_chunk();
-        auto& chunk_res = output_->data_chunk();
-
+    void operator_join_t::cross_join_(const vector::data_chunk_t& chunk_left,
+                                      const vector::data_chunk_t& chunk_right,
+                                      vector::data_chunk_t& chunk_res,
+                                      pipeline::context_t*) {
         size_t res_count = chunk_left.size() * chunk_right.size();
         std::vector<uint64_t> copy_indices_left;
         std::vector<uint64_t> copy_indices_right;
@@ -311,23 +272,13 @@ namespace components::operators {
         }
 
         vector::validate_chunk_capacity(chunk_res, res_count);
-        vector::indexing_vector_t left_indexing(output_->resource(), copy_indices_left.data());
-        vector::indexing_vector_t right_indexing(output_->resource(), copy_indices_right.data());
+        vector::indexing_vector_t left_indexing(resource_, copy_indices_left.data());
+        vector::indexing_vector_t right_indexing(resource_, copy_indices_right.data());
         for (size_t i = 0; i < chunk_left.column_count(); i++) {
-            vector::vector_ops::copy(chunk_left.data[i],
-                                     chunk_res.data[indices_left_.at(i)],
-                                     left_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_left.data[i], chunk_res.data[indices_left_.at(i)], left_indexing, res_count, 0, 0);
         }
         for (size_t i = 0; i < chunk_right.column_count(); i++) {
-            vector::vector_ops::copy(chunk_right.data[i],
-                                     chunk_res.data[indices_right_.at(i)],
-                                     right_indexing,
-                                     res_count,
-                                     0,
-                                     0);
+            vector::vector_ops::copy(chunk_right.data[i], chunk_res.data[indices_right_.at(i)], right_indexing, res_count, 0, 0);
         }
         chunk_res.set_cardinality(res_count);
     }

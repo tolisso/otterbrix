@@ -17,15 +17,15 @@ namespace components::operators {
         , upsert_(upsert) {}
 
     void operator_update::on_execute_impl(pipeline::context_t* pipeline_context) {
-        // Predicate matching + data prep only — storage I/O is handled by await_async_and_resume.
         if (left_ && left_->output() && right_ && right_->output()) {
-            auto& chunk_left = left_->output()->data_chunk();
-            auto& chunk_right = right_->output()->data_chunk();
+            auto chunk_left = left_->output()->merged();
+            auto chunk_right = right_->output()->merged();
             auto types_left = chunk_left.types();
             auto types_right = chunk_right.types();
-            if (left_->output()->data_chunk().size() == 0 && right_->output()->data_chunk().size() == 0) {
+            if (chunk_left.size() == 0 && chunk_right.size() == 0) {
                 if (upsert_) {
-                    output_ = operators::make_operator_data(resource(), types_left);
+                    vector::data_chunk_t out(resource(), types_left, vector::DEFAULT_VECTOR_CAPACITY);
+                    output_ = operators::make_operator_data(resource(), std::move(out));
                     for (const auto& expr : updates_) {
                         expr->execute(chunk_left, chunk_right, 0, 0, &pipeline_context->parameters);
                     }
@@ -34,8 +34,7 @@ namespace components::operators {
             } else {
                 modified_ = operators::make_operator_write_data(resource());
                 no_modified_ = operators::make_operator_write_data(resource());
-                output_ = operators::make_operator_data(left_->output()->resource(), types_left);
-                auto& out_chunk = output_->data_chunk();
+                vector::data_chunk_t out_chunk(left_->output()->resource(), types_left, vector::DEFAULT_VECTOR_CAPACITY);
                 auto predicate = expr_ ? predicates::create_predicate(left_->output()->resource(),
                                                                       pipeline_context->function_registry,
                                                                       expr_,
@@ -48,7 +47,6 @@ namespace components::operators {
                     for (size_t j = 0; j < chunk_right.size(); j++) {
                         if (predicate->check(chunk_left, chunk_right, i, j)) {
                             out_chunk.row_ids.data<int64_t>()[index] = chunk_left.row_ids.data<int64_t>()[i];
-                            // Copy original values to output first (preserves scan data for executor)
                             for (size_t k = 0; k < chunk_left.column_count(); k++) {
                                 vector::vector_ops::copy(chunk_left.data[k], out_chunk.data[k], i + 1, i, index);
                             }
@@ -67,17 +65,19 @@ namespace components::operators {
                     }
                 }
                 out_chunk.set_cardinality(index);
+                output_ = operators::make_operator_data(left_->output()->resource(), std::move(out_chunk));
             }
         } else if (left_ && left_->output()) {
             if (left_->output()->size() == 0) {
                 if (upsert_) {
-                    output_ = operators::make_operator_data(resource(), left_->output()->data_chunk().types());
+                    auto types = left_->output()->types();
+                    vector::data_chunk_t out(resource(), types, vector::DEFAULT_VECTOR_CAPACITY);
+                    output_ = operators::make_operator_data(resource(), std::move(out));
                 }
             } else {
-                auto& chunk = left_->output()->data_chunk();
+                auto chunk = left_->output()->merged();
                 auto types = chunk.types();
-                output_ = operators::make_operator_data(left_->output()->resource(), types);
-                auto& out_chunk = output_->data_chunk();
+                vector::data_chunk_t out_chunk(left_->output()->resource(), types, vector::DEFAULT_VECTOR_CAPACITY);
                 modified_ = operators::make_operator_write_data(resource());
                 no_modified_ = operators::make_operator_write_data(resource());
                 auto predicate = expr_ ? predicates::create_predicate(left_->output()->resource(),
@@ -97,7 +97,6 @@ namespace components::operators {
                             out_chunk.row_ids.data<int64_t>()[index] = chunk.row_ids.data<int64_t>()[i];
                         }
 
-                        // Copy original values to output first (preserves scan data for executor)
                         for (size_t j = 0; j < chunk.column_count(); j++) {
                             vector::vector_ops::copy(chunk.data[j], out_chunk.data[j], i + 1, i, index);
                         }
@@ -115,6 +114,7 @@ namespace components::operators {
                     }
                 }
                 out_chunk.set_cardinality(index);
+                output_ = operators::make_operator_data(left_->output()->resource(), std::move(out_chunk));
             }
         }
 

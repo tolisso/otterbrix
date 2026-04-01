@@ -116,7 +116,7 @@ namespace components::table {
 
     std::unique_ptr<row_group_t> row_group_t::add_column(collection_t* new_collection,
                                                          column_definition_t& new_column,
-                                                         const types::logical_value_t& default_value,
+                                                         const std::optional<types::logical_value_t>& default_value,
                                                          vector::vector_t& result) {
         auto added_column = column_data_t::create_column(collection_->resource(),
                                                          block_manager(),
@@ -126,12 +126,17 @@ namespace components::table {
 
         uint64_t rows_to_write = count;
         if (rows_to_write > 0) {
+            const types::logical_value_t fill_value = default_value.has_value()
+                                                          ? *default_value
+                                                          : types::logical_value_t{collection_->resource(), new_column.type()};
             column_append_state state;
             added_column->initialize_append(state);
             for (uint64_t i = 0; i < rows_to_write; i += vector::DEFAULT_VECTOR_CAPACITY) {
                 uint64_t rows_in_this_vector = std::min<uint64_t>(rows_to_write - i, vector::DEFAULT_VECTOR_CAPACITY);
-                assert(result.type() == default_value.type());
-                result.reference(default_value);
+                result.reference(fill_value);
+                if (!default_value.has_value()) {
+                    result.set_null(true);
+                }
                 added_column->append(state, result, rows_in_this_vector);
             }
         }
@@ -228,28 +233,64 @@ namespace components::table {
         }
     }
 
+    // Returns ALWAYS_FALSE if the filter provably matches no rows in this row group.
+    // For AND: prune if any child is ALWAYS_FALSE.
+    // For OR:  prune only if ALL children are ALWAYS_FALSE.
+    filter_propagate_result_t row_group_t::check_zonemap_filter(const table_filter_t* f) {
+        if (!f) {
+            return filter_propagate_result_t::NO_PRUNING_POSSIBLE;
+        }
+        switch (f->filter_type) {
+            case expressions::compare_type::eq:
+            case expressions::compare_type::gt:
+            case expressions::compare_type::gte:
+            case expressions::compare_type::lt:
+            case expressions::compare_type::lte: {
+                const auto& cf = f->cast<constant_filter_t>();
+                if (!cf.table_indices.empty()) {
+                    auto col_idx = cf.table_indices.front();
+                    if (col_idx < get_column_count()) {
+                        auto& col = get_column(col_idx);
+                        column_scan_state dummy;
+                        return col.check_zonemap(dummy, const_cast<table_filter_t&>(*f));
+                    }
+                }
+                return filter_propagate_result_t::NO_PRUNING_POSSIBLE;
+            }
+            case expressions::compare_type::union_and: {
+                const auto& conj = f->cast<conjunction_and_filter_t>();
+                for (const auto& child : conj.child_filters) {
+                    if (check_zonemap_filter(child.get()) == filter_propagate_result_t::ALWAYS_FALSE) {
+                        return filter_propagate_result_t::ALWAYS_FALSE;
+                    }
+                }
+                return filter_propagate_result_t::NO_PRUNING_POSSIBLE;
+            }
+            case expressions::compare_type::union_or: {
+                const auto& conj = f->cast<conjunction_or_filter_t>();
+                bool all_false = !conj.child_filters.empty();
+                for (const auto& child : conj.child_filters) {
+                    if (check_zonemap_filter(child.get()) != filter_propagate_result_t::ALWAYS_FALSE) {
+                        all_false = false;
+                        break;
+                    }
+                }
+                return all_false ? filter_propagate_result_t::ALWAYS_FALSE
+                                 : filter_propagate_result_t::NO_PRUNING_POSSIBLE;
+            }
+            default:
+                return filter_propagate_result_t::NO_PRUNING_POSSIBLE;
+        }
+    }
+
     bool row_group_t::check_zonemap_segments(collection_scan_state& state) {
         auto* f = state.filter();
         if (!f) {
             return true;
         }
-        // For constant comparison filters, check if any column's zonemap prunes this segment
-        if (f->filter_type == expressions::compare_type::eq || f->filter_type == expressions::compare_type::gt ||
-            f->filter_type == expressions::compare_type::gte || f->filter_type == expressions::compare_type::lt ||
-            f->filter_type == expressions::compare_type::lte) {
-            auto& cf = f->cast<constant_filter_t>();
-            if (!cf.table_indices.empty()) {
-                auto col_idx = cf.table_indices.front();
-                if (col_idx < get_column_count()) {
-                    auto& col = get_column(col_idx);
-                    column_scan_state dummy;
-                    auto result = col.check_zonemap(dummy, const_cast<table_filter_t&>(*f));
-                    if (result == filter_propagate_result_t::ALWAYS_FALSE) {
-                        next_vector(state);
-                        return false;
-                    }
-                }
-            }
+        if (check_zonemap_filter(f) == filter_propagate_result_t::ALWAYS_FALSE) {
+            next_vector(state);
+            return false;
         }
         return true;
     }
@@ -269,6 +310,90 @@ namespace components::table {
         }
         indexing = new_indexing;
         approved_tuple_count = result_count;
+    }
+
+
+    void row_group_t::filter_indexing_vectorized(std::pmr::memory_resource* resource,
+                                                 uint64_t vector_index,
+                                                 uint64_t max_count,
+                                                 vector::indexing_vector_t& indexing,
+                                                 const table_filter_t* filter,
+                                                 uint64_t& approved_tuple_count) {
+        switch (filter->filter_type) {
+            case expressions::compare_type::union_and: {
+                const auto& conj = filter->cast<conjunction_and_filter_t>();
+                for (const auto& child : conj.child_filters) {
+                    if (approved_tuple_count == 0) return;
+                    filter_indexing_vectorized(resource, vector_index, max_count,
+                                               indexing, child.get(), approved_tuple_count);
+                }
+                break;
+            }
+            case expressions::compare_type::union_or: {
+                const auto& conj = filter->cast<conjunction_or_filter_t>();
+                if (conj.child_filters.empty()) break;
+                // Build a pass-mask over chunk indices [0..max_count), union across children
+                std::pmr::vector<uint8_t> pass_mask(max_count, uint8_t{0}, resource);
+                for (const auto& child : conj.child_filters) {
+                    // Copy current indexing for this child (must allocate backing memory)
+                    vector::indexing_vector_t child_idx(indexing.resource(), approved_tuple_count);
+                    for (uint64_t i = 0; i < approved_tuple_count; i++) {
+                        child_idx.set_index(i, indexing.get_index(i));
+                    }
+                    uint64_t child_count = approved_tuple_count;
+                    filter_indexing_vectorized(resource, vector_index, max_count,
+                                               child_idx, child.get(), child_count);
+                    for (uint64_t i = 0; i < child_count; i++) {
+                        pass_mask[child_idx.get_index(i)] = 1;
+                    }
+                }
+                // Build result — use new_indexing to avoid writing to a potentially null indexing_
+                vector::indexing_vector_t new_indexing(indexing.resource(), approved_tuple_count);
+                uint64_t result_count = 0;
+                for (uint64_t i = 0; i < approved_tuple_count; i++) {
+                    auto idx = indexing.get_index(i);
+                    if (pass_mask[idx]) {
+                        new_indexing.set_index(result_count++, idx);
+                    }
+                }
+                approved_tuple_count = result_count;
+                indexing = new_indexing;
+                break;
+            }
+            default: {
+                // Leaf filter: use batch column scan + vectorized comparison when possible.
+                // Only eq/ne/lt/gt/lte/gte are supported by filter_selection_switch; everything
+                // else (regex, any, all, is_null, is_not_null, union_not, …) falls back.
+                {
+                    auto ft = filter->filter_type;
+                    if (ft != expressions::compare_type::eq && ft != expressions::compare_type::ne &&
+                        ft != expressions::compare_type::lt && ft != expressions::compare_type::gt &&
+                        ft != expressions::compare_type::lte && ft != expressions::compare_type::gte) {
+                        filter_indexing(resource, vector_index, indexing, filter, approved_tuple_count);
+                        break;
+                    }
+                }
+                const auto& cf = filter->cast<constant_filter_t>();
+                // Only handle flat column reference (no nested struct path)
+                if (cf.table_indices.size() != 1 || cf.table_indices.front() >= get_column_count()) {
+                    filter_indexing(resource, vector_index, indexing, filter, approved_tuple_count);
+                    break;
+                }
+                auto& col = get_column(cf.table_indices.front());
+                // Require matching physical types — mixed-type comparisons (e.g. BIGINT > DOUBLE)
+                // must go through check_predicate which handles implicit conversions.
+                if (col.type().to_physical_type() != cf.constant.type().to_physical_type()) {
+                    filter_indexing(resource, vector_index, indexing, filter, approved_tuple_count);
+                    break;
+                }
+                column_scan_state scan_state;
+                scan_state.initialize(col.type());
+                col.initialize_scan(scan_state);
+                vector::vector_t temp_vec(resource, col.type(), max_count);
+                col.filter(vector_index, scan_state, temp_vec, indexing, approved_tuple_count, *filter);
+                break;
+            }
+        }
     }
 
     template<table_scan_type TYPE>
@@ -334,7 +459,8 @@ namespace components::table {
                         }
                     }
                 }
-                state.valid_indexing = vector::indexing_vector_t(result.resource(), 0, result.capacity());
+                // Use max_count (not result.capacity()) to avoid allocating huge indexing arrays
+                state.valid_indexing = vector::indexing_vector_t(result.resource(), 0, max_count);
             } else {
                 uint64_t approved_tuple_count = count;
                 vector::indexing_vector_t indexing(result.resource(), result.capacity());
@@ -345,11 +471,12 @@ namespace components::table {
                 }
                 if (filter) {
                     assert(ALLOW_UPDATES);
-                    filter_indexing(collection_->resource(),
-                                    state.vector_index,
-                                    indexing,
-                                    filter,
-                                    approved_tuple_count);
+                    filter_indexing_vectorized(collection_->resource(),
+                                               state.vector_index,
+                                               max_count,
+                                               indexing,
+                                               filter,
+                                               approved_tuple_count);
                 }
                 if (approved_tuple_count == 0) {
                     for (uint64_t i = 0; i < column_ids.size(); i++) {
@@ -405,11 +532,15 @@ namespace components::table {
                 count = approved_tuple_count;
                 state.valid_indexing = indexing;
             }
-            for (uint64_t i = 0; i < count; i++) {
-                types::logical_value_t index{result.row_ids.resource(),
-                                             static_cast<int64_t>(state.vector_index * vector::DEFAULT_VECTOR_CAPACITY +
-                                                                  state.valid_indexing.get_index(i))};
-                result.row_ids.set_value(result.size() + i, std::move(index));
+            // Write row IDs directly into the BIGINT buffer — avoids per-row logical_value_t construction
+            {
+                const int64_t base = static_cast<int64_t>(state.vector_index * vector::DEFAULT_VECTOR_CAPACITY);
+                int64_t* row_id_data = result.row_ids.data<int64_t>();
+                const uint64_t offset = result.size();
+                for (uint64_t i = 0; i < count; i++) {
+                    row_id_data[offset + i] = base + static_cast<int64_t>(state.valid_indexing.get_index(i));
+                }
+                // row_ids validity is initially all-valid (no mask) so no update needed
             }
             result.set_cardinality(result.size() + count);
             state.vector_index++;
@@ -426,6 +557,9 @@ namespace components::table {
 
     void row_group_t::scan_committed(collection_scan_state& state, vector::data_chunk_t& result, table_scan_type type) {
         switch (type) {
+            case table_scan_type::REGULAR:
+                templated_scan<table_scan_type::REGULAR>(state, result);
+                break;
             case table_scan_type::COMMITTED_ROWS:
                 templated_scan<table_scan_type::COMMITTED_ROWS>(state, result);
                 break;

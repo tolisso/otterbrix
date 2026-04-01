@@ -61,6 +61,111 @@ namespace components::storage {
             }
         }
 
+        void scan_projected(vector::data_chunk_t& output,
+                            const table::table_filter_t* filter,
+                            int limit,
+                            table::transaction_data txn,
+                            size_t column_limit) override {
+            size_t n = std::min(column_limit, table_.column_count());
+            std::vector<table::storage_index_t> column_indices;
+            column_indices.reserve(n);
+            for (size_t i = 0; i < n; i++) {
+                column_indices.emplace_back(static_cast<int64_t>(i));
+            }
+            table::table_scan_state state(resource_);
+            table_.initialize_scan(state, column_indices, filter);
+            state.table_state.txn = txn;
+            state.local_state.txn = txn;
+            table_.scan(output, state);
+            if (limit >= 0) {
+                output.set_cardinality(std::min(output.size(), static_cast<uint64_t>(limit)));
+            }
+        }
+
+        std::vector<vector::data_chunk_t>
+        scan_chunked(const table::table_filter_t* filter, int limit, table::transaction_data txn) override {
+            std::vector<table::storage_index_t> column_indices;
+            column_indices.reserve(table_.column_count());
+            for (size_t i = 0; i < table_.column_count(); i++) {
+                column_indices.emplace_back(static_cast<int64_t>(i));
+            }
+            table::table_scan_state state(resource_);
+            table_.initialize_scan(state, column_indices, filter);
+            state.table_state.txn = txn;
+            state.local_state.txn = txn;
+
+            auto types = table_.copy_types();
+            std::vector<vector::data_chunk_t> result;
+            int64_t remaining = limit;
+
+            while (true) {
+                vector::data_chunk_t chunk(resource_, types, vector::DEFAULT_VECTOR_CAPACITY);
+                bool has_data =
+                    state.table_state.scan_committed(chunk, table::table_scan_type::REGULAR);
+                if (chunk.size() > 0) {
+                    if (limit >= 0) {
+                        auto take = std::min(chunk.size(), static_cast<uint64_t>(remaining));
+                        if (take < chunk.size()) {
+                            chunk.set_cardinality(take);
+                        }
+                        remaining -= static_cast<int64_t>(take);
+                    }
+                    result.push_back(std::move(chunk));
+                }
+                if (!has_data || (limit >= 0 && remaining <= 0)) {
+                    break;
+                }
+            }
+            return result;
+        }
+
+        std::vector<vector::data_chunk_t>
+        scan_projected_chunked(const table::table_filter_t* filter,
+                               int limit,
+                               table::transaction_data txn,
+                               size_t column_limit) override {
+            size_t n = std::min(column_limit, table_.column_count());
+            std::vector<table::storage_index_t> column_indices;
+            column_indices.reserve(n);
+            for (size_t i = 0; i < n; i++) {
+                column_indices.emplace_back(static_cast<int64_t>(i));
+            }
+            table::table_scan_state state(resource_);
+            table_.initialize_scan(state, column_indices, filter);
+            state.table_state.txn = txn;
+            state.local_state.txn = txn;
+
+            auto all_types = table_.copy_types();
+            std::pmr::vector<types::complex_logical_type> proj_types(resource_);
+            proj_types.reserve(n);
+            for (size_t i = 0; i < n; i++) {
+                proj_types.push_back(all_types[i]);
+            }
+
+            std::vector<vector::data_chunk_t> result;
+            int64_t remaining = limit;
+
+            while (true) {
+                vector::data_chunk_t chunk(resource_, proj_types, vector::DEFAULT_VECTOR_CAPACITY);
+                bool has_data =
+                    state.table_state.scan_committed(chunk, table::table_scan_type::REGULAR);
+                if (chunk.size() > 0) {
+                    if (limit >= 0) {
+                        auto take = std::min(chunk.size(), static_cast<uint64_t>(remaining));
+                        if (take < chunk.size()) {
+                            chunk.set_cardinality(take);
+                        }
+                        remaining -= static_cast<int64_t>(take);
+                    }
+                    result.push_back(std::move(chunk));
+                }
+                if (!has_data || (limit >= 0 && remaining <= 0)) {
+                    break;
+                }
+            }
+            return result;
+        }
+
         void fetch(vector::data_chunk_t& output, const vector::vector_t& row_ids, uint64_t count) override {
             table::column_fetch_state state;
             std::vector<table::storage_index_t> column_indices;

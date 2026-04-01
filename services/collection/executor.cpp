@@ -21,10 +21,12 @@ namespace services::collection::executor {
 
     plan_t::plan_t(std::stack<components::operators::operator_ptr>&& sub_plans,
                    components::logical_plan::storage_parameters parameters,
-                   services::context_storage_t&& context_storage)
+                   services::context_storage_t&& context_storage,
+                   components::logical_plan::limit_t limit)
         : sub_plans(std::move(sub_plans))
         , parameters(parameters)
-        , context_storage_(context_storage) {}
+        , context_storage_(context_storage)
+        , limit(limit) {}
 
     executor_t::executor_t(std::pmr::memory_resource* resource,
                            actor_zeta::address_t parent_address,
@@ -192,6 +194,7 @@ namespace services::collection::executor {
         plan->set_as_root();
 
         auto plan_data = traverse_plan_(std::move(plan), std::move(parameters), std::move(context_storage));
+        plan_data.limit = limit;
 
         // Step 2: Execute physical plan
         auto result = co_await execute_sub_plan_(session, std::move(plan_data), txn_data);
@@ -443,7 +446,7 @@ namespace services::collection::executor {
                 case components::operators::operator_type::insert: {
                     trace(log_, "executor::execute_plan : operators::operator_type::insert");
                     if (plan->output()) {
-                        cursor = make_cursor(resource(), std::move(plan->output()->data_chunk()));
+                        cursor = make_cursor(resource(), plan->output()->merged());
                     } else {
                         cursor = make_cursor(resource(), operation_status_t::success);
                     }
@@ -458,7 +461,7 @@ namespace services::collection::executor {
                         }
                     }
                     if (plan->output()) {
-                        cursor = make_cursor(resource(), std::move(plan->output()->data_chunk()));
+                        cursor = make_cursor(resource(), plan->output()->merged());
                     } else {
                         cursor = make_cursor(resource(), operation_status_t::success);
                     }
@@ -468,33 +471,28 @@ namespace services::collection::executor {
                 case components::operators::operator_type::update: {
                     trace(log_, "executor::execute_plan : operators::operator_type::update");
                     if (plan->output()) {
-                        cursor = make_cursor(resource(), std::move(plan->output()->data_chunk()));
+                        cursor = make_cursor(resource(), plan->output()->merged());
                     } else {
                         cursor = make_cursor(resource(), operation_status_t::success);
                     }
                     break;
                 }
 
-                case components::operators::operator_type::raw_data:
-                case components::operators::operator_type::join:
-                case components::operators::operator_type::aggregate: {
-                    if (plan->type() == components::operators::operator_type::aggregate) {
-                        trace(log_,
-                              "executor::execute_plan : operators::operator_type::aggregate, session: {}",
-                              session.data());
-                    } else if (plan->type() == components::operators::operator_type::join) {
-                        trace(log_,
-                              "executor::execute_plan : operators::operator_type::join, session: {}",
-                              session.data());
-                    } else {
-                        trace(log_,
-                              "executor::execute_plan : operators::operator_type::raw_data, session: {}",
-                              session.data());
-                    }
+                default: {
+                    trace(log_,
+                          "executor::execute_plan : operator_type={}, session: {}",
+                          static_cast<int>(plan->type()),
+                          session.data());
 
                     if (plan->is_root()) {
                         if (plan->output()) {
-                            cursor = make_cursor(resource(), std::move(plan->output()->data_chunk()));
+                            auto chunk = plan->output()->merged();
+                            // Apply post-sort limit
+                            if (plan_data.limit.limit() > 0 &&
+                                static_cast<int>(chunk.size()) > plan_data.limit.limit()) {
+                                chunk.set_cardinality(static_cast<uint64_t>(plan_data.limit.limit()));
+                            }
+                            cursor = make_cursor(resource(), std::move(chunk));
                         } else {
                             cursor = make_cursor(resource(), operation_status_t::success);
                         }
@@ -503,10 +501,6 @@ namespace services::collection::executor {
                     }
                     break;
                 }
-
-                default:
-                    cursor = make_cursor(resource(), operation_status_t::success);
-                    break;
             }
 
             if (cursor->is_error()) {
@@ -541,7 +535,7 @@ namespace services::collection::executor {
 
         switch (waiting_op->type()) {
             case operator_type::insert: {
-                auto& out_chunk = waiting_op->output()->data_chunk();
+                auto out_chunk = waiting_op->output()->merged();
                 auto* ins = static_cast<operator_insert*>(waiting_op.get());
                 components::execution_context_t exec_ctx{ctx->session, ctx->txn, ins->collection_name()};
 
@@ -622,7 +616,7 @@ namespace services::collection::executor {
                 // Mirror to index
                 if (index_address_ != actor_zeta::address_t::empty_address()) {
                     if (auto scan_out = waiting_op->left() ? waiting_op->left()->output() : nullptr) {
-                        auto& sc = scan_out->data_chunk();
+                        auto sc = scan_out->merged();
                         auto idx_data = std::make_unique<data_chunk_t>(resource(), sc.types(), sc.size());
                         sc.copy(*idx_data, 0);
                         auto idx_ids = std::pmr::vector<size_t>(resource());
@@ -654,7 +648,7 @@ namespace services::collection::executor {
 
             case operator_type::update: {
                 auto* upd = static_cast<operator_update*>(waiting_op.get());
-                auto& out_chunk = waiting_op->output()->data_chunk();
+                auto out_chunk = waiting_op->output()->merged();
                 components::execution_context_t exec_ctx{ctx->session, ctx->txn, upd->collection_name()};
 
                 // Capture WAL data: row_ids + updated data for physical update
@@ -687,7 +681,7 @@ namespace services::collection::executor {
                 // Mirror to index (old+new data)
                 if (index_address_ != actor_zeta::address_t::empty_address()) {
                     if (auto scan_out = waiting_op->left() ? waiting_op->left()->output() : nullptr) {
-                        auto& sc = scan_out->data_chunk();
+                        auto sc = scan_out->merged();
                         auto old_data = std::make_unique<data_chunk_t>(resource(), sc.types(), sc.size());
                         sc.copy(*old_data, 0);
                         auto new_data = std::make_unique<data_chunk_t>(resource(), out_chunk.types(), out_chunk.size());
