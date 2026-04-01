@@ -58,11 +58,14 @@ namespace components::operators {
                                                                         &pipeline_context->parameters)
                                          : predicates::create_all_true_predicate(left_->output()->resource());
 
+            vector::indexing_vector_t all_indices(nullptr, nullptr);
+            auto results = predicate->batch_check(chunk, chunk, all_indices, all_indices, chunk.size());
+
             // Collect matching row indices, then gather all columns at once (avoids per-value boxing/unboxing)
             std::pmr::vector<uint64_t> matched(left_->output()->resource());
             matched.reserve(chunk.size());
             for (size_t i = 0; i < chunk.size(); i++) {
-                if (predicate->check(chunk, i)) {
+                if (results[i]) {
                     matched.push_back(static_cast<uint64_t>(i));
                     if (!limit_.check(static_cast<int>(matched.size()))) {
                         break;
