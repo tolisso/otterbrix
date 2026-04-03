@@ -392,7 +392,13 @@ namespace components::operators {
 
     void operator_group_t::on_execute_impl(pipeline::context_t* pipeline_context) {
         if (left_ && left_->output()) {
-            input_chunk_ = std::make_unique<vector::data_chunk_t>(left_->output()->merged());
+            auto& src_chunks = left_->output()->chunks();
+            if (src_chunks.size() == 1) {
+                // Single chunk: move it directly — zero copy
+                input_chunk_ = std::make_unique<vector::data_chunk_t>(std::move(src_chunks[0]));
+            } else {
+                input_chunk_ = std::make_unique<vector::data_chunk_t>(left_->output()->merged());
+            }
             auto& chunk = *input_chunk_;
 
             // Phase 1: Pre-compute arithmetic columns (before grouping)
