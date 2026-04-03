@@ -404,11 +404,13 @@ static BenchResult run_bench(const std::string& label,
         "GROUP BY kind, \"commit.operation\";");
 
     // ---- Queries -------------------------------------------------------------
+    std::cout << "\n>>>>> DEBUG: starting Q1 pipeline <<<<<\n";
     double q1 = run_query(&space, "Q1: Top event types",
         "SELECT \"commit.collection\", COUNT(*) as count "
         "FROM bench.events "
         "GROUP BY \"commit.collection\" "
         "ORDER BY count DESC;");
+    std::cout << ">>>>> DEBUG: Q1 pipeline done <<<<<\n";
 
     double q2 = run_query(&space, "Q2: Unique users (kind=commit, op=create)",
         "SELECT \"commit.collection\", COUNT(*) as count, COUNT(DISTINCT did) as users "

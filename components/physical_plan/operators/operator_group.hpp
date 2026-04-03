@@ -122,6 +122,7 @@ namespace components::operators {
         std::pmr::unordered_map<size_t, std::pmr::vector<size_t>> group_index_;
         std::pmr::vector<types::complex_logical_type> key_col_types_; // source column types for key columns (fast path)
         std::pmr::vector<size_t> key_col_indices_;                    // source column indices for key columns (fast path)
+        std::unordered_map<const char*, uint32_t> interned_str_key_map_; // pointer→group for interned string streaming
 
         void on_execute_impl(pipeline::context_t* pipeline_context) override;
 
@@ -137,6 +138,14 @@ namespace components::operators {
                            std::pmr::vector<std::pmr::vector<types::logical_value_t>>& agg_results);
         void calc_post_aggregates(pipeline::context_t* pipeline_context, vector::data_chunk_t& result);
         void filter_having(pipeline::context_t* pipeline_context, vector::data_chunk_t& result);
+
+        // Streaming execution: process src_chunks one by one without merged().
+        // Returns false if streaming is not applicable (falls back to merged path).
+        bool execute_streaming(pipeline::context_t* pipeline_context,
+                               const std::pmr::vector<vector::data_chunk_t>& src_chunks);
+        // Assign group IDs for a single chunk using persistent group_index_.
+        void assign_groups_for_chunk(vector::data_chunk_t& chunk,
+                                     std::pmr::vector<uint32_t>& chunk_group_ids);
     };
 
 } // namespace components::operators

@@ -2,6 +2,8 @@
 
 #include "arithmetic_eval.hpp"
 #include <cassert>
+#include <chrono>
+#include <iostream>
 #include <components/vector/vector_operations.hpp>
 #include <string_view>
 #include <unordered_set>
@@ -271,6 +273,56 @@ namespace components::operators {
             return static_cast<size_t>(next_group_id);
         }
 
+        // Pointer-based GROUP BY for interned strings.
+        // Uses const char* key (pointer hash + pointer equality) — O(1) per row, no string iteration.
+        // Only valid when strings are interned (auxiliary is set → strings went through string_heap).
+        size_t build_single_key_groups_interned(
+            std::pmr::memory_resource* resource,
+            const vector::vector_t& vec,
+            const std::pmr::string& key_name,
+            size_t num_rows,
+            std::pmr::vector<uint32_t>& fast_group_ids,
+            size_t row_offset,
+            std::pmr::vector<uint64_t>& first_row_per_group,
+            std::pmr::vector<std::pmr::vector<types::logical_value_t>>& group_keys,
+            std::pmr::vector<std::pmr::vector<size_t>>& row_ids_per_group)
+        {
+            std::unordered_map<const char*, uint32_t> key_to_group;
+            const auto* raw = vec.data<std::string_view>();
+            const auto& validity = vec.validity();
+            uint32_t next_group_id = 0;
+
+            for (size_t row = 0; row < num_rows; row++) {
+                if (!validity.row_is_valid(row)) {
+                    fast_group_ids[row_offset + row] = UINT32_MAX;
+                    continue;
+                }
+
+                const char* ptr = raw[row].data();
+                auto it = key_to_group.find(ptr);
+                if (it != key_to_group.end()) {
+                    uint32_t gid = it->second;
+                    fast_group_ids[row_offset + row] = gid;
+                    row_ids_per_group[gid].push_back(row);
+                } else {
+                    uint32_t gid = next_group_id++;
+                    key_to_group.emplace(ptr, gid);
+                    fast_group_ids[row_offset + row] = gid;
+
+                    auto lv = raw_to_logical_value(resource, raw[row]);
+                    lv.set_alias(std::string(key_name));
+                    std::pmr::vector<types::logical_value_t> key_vals(resource);
+                    key_vals.push_back(std::move(lv));
+                    group_keys.push_back(std::move(key_vals));
+                    first_row_per_group.push_back(static_cast<uint64_t>(row));
+                    std::pmr::vector<size_t> row_ids(resource);
+                    row_ids.push_back(row);
+                    row_ids_per_group.push_back(std::move(row_ids));
+                }
+            }
+            return static_cast<size_t>(next_group_id);
+        }
+
         // Dispatch to the typed single-key GROUP BY path based on physical type.
         // Returns true if handled, false if the type is unsupported (caller should fall back).
         bool try_single_key_fast_group(
@@ -287,9 +339,17 @@ namespace components::operators {
             using PT = types::physical_type;
             switch (vec.type().to_physical_type()) {
                 case PT::STRING:
-                    build_single_key_groups_typed<std::string_view>(
-                        resource, vec, key_name, num_rows, fast_group_ids, row_offset,
-                        first_row_per_group, group_keys, row_ids_per_group);
+                    // If strings are interned (auxiliary is set → went through string_heap),
+                    // use pointer comparison instead of content comparison. O(1) per row.
+                    if (vec.auxiliary()) {
+                        build_single_key_groups_interned(
+                            resource, vec, key_name, num_rows, fast_group_ids, row_offset,
+                            first_row_per_group, group_keys, row_ids_per_group);
+                    } else {
+                        build_single_key_groups_typed<std::string_view>(
+                            resource, vec, key_name, num_rows, fast_group_ids, row_offset,
+                            first_row_per_group, group_keys, row_ids_per_group);
+                    }
                     return true;
                 case PT::INT8:
                     build_single_key_groups_typed<int8_t>(
@@ -393,6 +453,21 @@ namespace components::operators {
     void operator_group_t::on_execute_impl(pipeline::context_t* pipeline_context) {
         if (left_ && left_->output()) {
             auto& src_chunks = left_->output()->chunks();
+
+            // Streaming path: process chunks one by one, no merged() copy.
+            // Only for multi-chunk without pre-group arithmetic.
+            if (src_chunks.size() > 1 && computed_columns_.empty()) {
+                auto dbg_stream = std::chrono::steady_clock::now();
+                if (execute_streaming(pipeline_context, src_chunks)) {
+                    std::cout << "[GROUP_OP] streaming total: "
+                              << std::chrono::duration<double,std::milli>(
+                                     std::chrono::steady_clock::now() - dbg_stream).count()
+                              << " ms\n";
+                    return;
+                }
+                std::cout << "[GROUP_OP] streaming fallback to merged()\n";
+            }
+
             if (src_chunks.size() == 1) {
                 // Single chunk: move it directly — zero copy
                 input_chunk_ = std::make_unique<vector::data_chunk_t>(std::move(src_chunks[0]));
@@ -400,6 +475,50 @@ namespace components::operators {
                 input_chunk_ = std::make_unique<vector::data_chunk_t>(left_->output()->merged());
             }
             auto& chunk = *input_chunk_;
+
+            // DEBUG
+            {
+                std::cout << "[GROUP_OP] input: " << chunk.size() << " rows, "
+                          << chunk.column_count() << " cols, "
+                          << src_chunks.size() << " input chunk(s)\n";
+                std::cout << "[GROUP_OP] group keys (" << keys_.size() << "): ";
+                for (const auto& k : keys_) std::cout << '"' << k.name << "\" ";
+                std::cout << "\n";
+                std::cout << "[GROUP_OP] aggregates (" << values_.size() << "): ";
+                for (const auto& v : values_) std::cout << '"' << v.name << "\" ";
+                std::cout << "\n";
+
+                // Pointer dedup check: for STRING keys, verify identical strings share pointer
+                if (keys_.size() == 1 && !keys_[0].full_path.empty()) {
+                    size_t key_col = keys_[0].full_path.front();
+                    if (key_col < chunk.column_count() &&
+                        chunk.data[key_col].type().to_physical_type() ==
+                            types::physical_type::STRING) {
+                        const auto* sv_data = chunk.data[key_col].data<std::string_view>();
+                        std::unordered_map<std::string_view, const char*> content_to_ptr;
+                        size_t ptr_matches = 0, content_matches = 0;
+                        for (size_t r = 0; r < chunk.size(); ++r) {
+                            if (chunk.data[key_col].is_null(r)) continue;
+                            auto sv = sv_data[r];
+                            auto it = content_to_ptr.find(sv);
+                            if (it != content_to_ptr.end()) {
+                                content_matches++;
+                                if (it->second == sv.data()) ptr_matches++;
+                            } else {
+                                content_to_ptr.emplace(sv, sv.data());
+                            }
+                        }
+                        std::cout << "[GROUP_OP] pointer-dedup check: "
+                                  << "content_matches=" << content_matches
+                                  << " ptr_matches=" << ptr_matches
+                                  << (ptr_matches == content_matches
+                                          ? "  => POINTERS EQUAL for same strings"
+                                          : "  => POINTERS DIFFER for same strings")
+                                  << "\n";
+                    }
+                }
+            }
+            auto dbg_t0 = std::chrono::steady_clock::now();
 
             // Phase 1: Pre-compute arithmetic columns (before grouping)
             for (auto& comp : computed_columns_) {
@@ -424,10 +543,31 @@ namespace components::operators {
             }
 
             // Phase 2: Group by keys (columnar, no transpose)
+            // Show which GROUP BY path will be used for first STRING key
+            if (keys_.size() == 1 && !keys_[0].full_path.empty()) {
+                size_t kc = keys_[0].full_path.front();
+                if (kc < chunk.column_count() &&
+                    chunk.data[kc].type().to_physical_type() == types::physical_type::STRING) {
+                    std::cout << "[GROUP_OP] string key path: "
+                              << (chunk.data[kc].auxiliary() ? "INTERNED (pointer cmp)" : "content cmp")
+                              << "\n";
+                }
+            }
+            auto t_p2 = std::chrono::steady_clock::now();
             create_list_rows();
+            auto t_p2_end = std::chrono::steady_clock::now();
+            std::cout << "[GROUP_OP] Phase2 (grouping): "
+                      << std::chrono::duration<double,std::milli>(t_p2_end - t_p2).count() << " ms  "
+                      << "groups=" << group_keys_.size()
+                      << (fast_group_ids_valid_ ? " (fast path)" : " (slow path)") << "\n";
 
             // Phase 3: Aggregate per group + build result chunk
+            auto t_p3 = std::chrono::steady_clock::now();
             auto result = calc_aggregate_values(pipeline_context);
+            auto t_p3_end = std::chrono::steady_clock::now();
+            std::cout << "[GROUP_OP] Phase3 (aggregate): "
+                      << std::chrono::duration<double,std::milli>(t_p3_end - t_p3).count() << " ms  "
+                      << "output rows=" << result.size() << "\n";
 
             // Phase 4: Post-aggregate arithmetic (columnar)
             size_t size_before_post = result.data.size();
@@ -457,6 +597,10 @@ namespace components::operators {
             }
 
             // Phase 8: Output
+            std::cout << "[GROUP_OP] total: "
+                      << std::chrono::duration<double,std::milli>(
+                             std::chrono::steady_clock::now() - dbg_t0).count()
+                      << " ms  output=" << result.size() << " rows\n";
             output_ = operators::make_operator_data(left_->output()->resource(), std::move(result));
 
             // Clear temporary grouping state
@@ -1112,6 +1256,246 @@ namespace components::operators {
             vector::indexing_vector_t idx(resource_, reinterpret_cast<uint64_t*>(keep_indices.data()));
             result.slice(idx, keep_count);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // assign_groups_for_chunk: hash-based group assignment using persistent
+    // group_index_. Works correctly across all chunks without merging.
+    // -------------------------------------------------------------------------
+    void operator_group_t::assign_groups_for_chunk(vector::data_chunk_t& chunk,
+                                                    std::pmr::vector<uint32_t>& chunk_group_ids) {
+        size_t num_rows = chunk.size();
+        chunk_group_ids.assign(num_rows, UINT32_MAX);
+
+        // Single STRING key with interning (auxiliary set after string_heap copy)
+        if (key_col_indices_.size() == 1) {
+            size_t kci = key_col_indices_[0];
+            const auto& key_vec = chunk.data[kci];
+            if (key_vec.type().to_physical_type() == types::physical_type::STRING &&
+                key_vec.get_vector_type() == vector::vector_type::FLAT &&
+                key_vec.auxiliary()) {
+                // Strings went through string_heap → same pointer for same content.
+                // Use const char* as key for O(1) hash + pointer comparison.
+                const auto* raw = key_vec.data<std::string_view>();
+                const auto& validity = key_vec.validity();
+                for (size_t row = 0; row < num_rows; row++) {
+                    if (!validity.row_is_valid(row)) continue;
+                    const char* ptr = raw[row].data();
+                    auto it = interned_str_key_map_.find(ptr);
+                    if (it != interned_str_key_map_.end()) {
+                        chunk_group_ids[row] = it->second;
+                    } else {
+                        uint32_t gid = static_cast<uint32_t>(group_keys_.size());
+                        interned_str_key_map_.emplace(ptr, gid);
+                        auto lv = raw_to_logical_value(resource_, raw[row]);
+                        lv.set_alias(std::string(keys_[0].name));
+                        std::pmr::vector<types::logical_value_t> kv(resource_);
+                        kv.push_back(std::move(lv));
+                        group_keys_.push_back(std::move(kv));
+                        chunk_group_ids[row] = gid;
+                    }
+                }
+                return;
+            }
+        }
+
+        // General path: batch hash + group_index_ (content comparison)
+        vector::vector_t hash_vec(resource_, types::logical_type::UBIGINT, num_rows);
+        std::vector<uint64_t> col_ids(key_col_indices_.begin(), key_col_indices_.end());
+        chunk.hash(col_ids, hash_vec);
+        const auto* hashes = hash_vec.data<uint64_t>();
+
+        for (size_t row = 0; row < num_rows; row++) {
+            auto hash_val = static_cast<size_t>(hashes[row]);
+            auto it = group_index_.find(hash_val);
+            bool is_new = true;
+            if (it != group_index_.end()) {
+                for (size_t idx : it->second) {
+                    if (keys_match(chunk, key_col_indices_, row, group_keys_[idx])) {
+                        chunk_group_ids[row] = static_cast<uint32_t>(idx);
+                        is_new = false;
+                        break;
+                    }
+                }
+            }
+            if (is_new) {
+                std::pmr::vector<types::logical_value_t> kv(resource_);
+                for (size_t ki = 0; ki < key_col_indices_.size(); ki++) {
+                    auto val = chunk.value(key_col_indices_[ki], row);
+                    val.set_alias(std::string{keys_[ki].name});
+                    kv.push_back(std::move(val));
+                }
+                uint32_t gid = static_cast<uint32_t>(group_keys_.size());
+                group_index_[hash_val].push_back(gid);
+                group_keys_.push_back(std::move(kv));
+                chunk_group_ids[row] = gid;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // execute_streaming: GROUP BY without merged(), one chunk at a time.
+    // Returns false if streaming is not applicable.
+    // -------------------------------------------------------------------------
+    bool operator_group_t::execute_streaming(pipeline::context_t* pipeline_context,
+                                              const std::pmr::vector<vector::data_chunk_t>& src_chunks) {
+        if (src_chunks.empty()) return false;
+
+        // Resolve key column indices from keys_ (require simple column path)
+        key_col_indices_.clear();
+        key_col_types_.clear();
+        for (const auto& key : keys_) {
+            if (key.type != group_key_t::kind::column || key.full_path.size() != 1) {
+                return false;  // complex key path — use merged()
+            }
+            key_col_indices_.push_back(key.full_path.front());
+        }
+        if (key_col_indices_.empty()) return false;
+
+        // Get column types from first chunk
+        const auto& first = src_chunks[0];
+        for (size_t ci : key_col_indices_) {
+            if (ci >= first.column_count()) return false;
+            key_col_types_.push_back(first.data[ci].type());
+        }
+
+        // Analyze aggregates (same logic as calc_aggregate_values)
+        using agg_info_t = struct {
+            aggregate::builtin_agg kind;
+            std::pmr::vector<size_t> full_path;
+            types::logical_type col_type;
+            bool is_count_star;
+            bool is_count_col;
+        };
+        std::pmr::vector<agg_info_t> agg_infos(resource_);
+
+        for (const auto& value : values_) {
+            auto* func_op = dynamic_cast<aggregate::operator_func_t*>(value.aggregator.get());
+            if (!func_op || !func_op->func()) return false;
+            auto kind = aggregate::classify(func_op->func()->name());
+            if (kind == aggregate::builtin_agg::UNKNOWN) return false;
+            // COUNT(DISTINCT) needs persistent sets — not handled in streaming path
+            if (func_op->is_distinct()) return false;
+
+            std::pmr::vector<size_t> col_path{{SIZE_MAX}, resource_};
+            types::logical_type col_type = types::logical_type::NA;
+            bool count_star = (kind == aggregate::builtin_agg::COUNT && func_op->args().empty());
+            bool count_col  = (kind == aggregate::builtin_agg::COUNT && !func_op->is_distinct() &&
+                               func_op->args().size() == 1 &&
+                               std::holds_alternative<expressions::key_t>(func_op->args()[0]));
+
+            if (count_star) {
+                col_type = types::logical_type::UBIGINT;
+            } else if (count_col) {
+                col_path = std::get<expressions::key_t>(func_op->args()[0]).path();
+                if (col_path.empty() || col_path.front() == SIZE_MAX) return false;
+                col_type = types::logical_type::UBIGINT;
+            } else if (func_op->args().size() == 1 &&
+                       std::holds_alternative<expressions::key_t>(func_op->args()[0])) {
+                col_path = std::get<expressions::key_t>(func_op->args()[0]).path();
+                if (col_path.empty() || col_path.front() == SIZE_MAX) return false;
+                col_type = first.at(col_path)->type().type();
+                if (!types::is_numeric(col_type)) return false;
+            } else {
+                return false;
+            }
+            agg_infos.push_back({kind, std::move(col_path), col_type, count_star, count_col});
+        }
+
+        // Aggregate states per aggregate function, indexed by group_id.
+        // Grows as new groups are discovered.
+        std::pmr::vector<std::pmr::vector<aggregate::raw_agg_state_t>> agg_states(resource_);
+        agg_states.resize(values_.size());
+
+        std::pmr::vector<uint32_t> chunk_gids(resource_);
+
+        // Process each chunk
+        for (auto& chunk : const_cast<std::pmr::vector<vector::data_chunk_t>&>(src_chunks)) {
+            if (chunk.size() == 0) continue;
+
+            // Assign group IDs for this chunk
+            assign_groups_for_chunk(chunk, chunk_gids);
+
+            // Grow aggregate states for any newly discovered groups
+            size_t num_groups = group_keys_.size();
+            for (auto& states : agg_states) {
+                if (states.size() < num_groups)
+                    states.resize(num_groups);
+            }
+
+            size_t num_rows = chunk.size();
+            const uint32_t* gids = chunk_gids.data();
+
+            for (size_t a = 0; a < agg_infos.size(); a++) {
+                auto& info  = agg_infos[a];
+                auto& states = agg_states[a];
+                if (info.is_count_star) {
+                    for (size_t i = 0; i < num_rows; i++) {
+                        if (gids[i] != UINT32_MAX) states[gids[i]].update_count();
+                    }
+                } else if (info.is_count_col) {
+                    const auto& col = *chunk.at(info.full_path);
+                    for (size_t i = 0; i < num_rows; i++) {
+                        if (gids[i] != UINT32_MAX && !col.is_null(i)) states[gids[i]].update_count();
+                    }
+                } else {
+                    aggregate::update_all(info.kind, *chunk.at(info.full_path), gids, num_rows, states);
+                }
+            }
+        }
+
+        // Finalize aggregate states → logical_value_t
+        size_t num_groups = group_keys_.size();
+        size_t key_count  = num_groups > 0 ? group_keys_[0].size() : 0;
+
+        std::pmr::vector<std::pmr::vector<types::logical_value_t>> agg_results(resource_);
+        for (size_t a = 0; a < values_.size(); a++) {
+            auto& info = agg_infos[a];
+            std::pmr::vector<types::logical_value_t> results(resource_);
+            results.reserve(num_groups);
+            for (size_t g = 0; g < num_groups; g++) {
+                auto val = aggregate::finalize_state(resource_, info.kind, agg_states[a][g], info.col_type);
+                val.set_alias(std::string(values_[a].name));
+                results.push_back(std::move(val));
+            }
+            agg_results.push_back(std::move(results));
+        }
+
+        // Build result (uses slow path via group_keys_ since first_row_per_group_ is empty)
+        auto result = build_result_chunk(num_groups, key_count, agg_results);
+
+        // Post-aggregate arithmetic (Phase 4)
+        size_t size_before_post = result.data.size();
+        calc_post_aggregates(pipeline_context, result);
+
+        // Remove internal aggregate columns (Phase 5)
+        if (internal_aggregate_count_ > 0) {
+            auto it_end   = result.data.begin() + static_cast<std::ptrdiff_t>(size_before_post);
+            auto it_begin = it_end - static_cast<std::ptrdiff_t>(internal_aggregate_count_);
+            result.data.erase(it_begin, it_end);
+        }
+
+        // HAVING filter (Phase 6)
+        if (having_) filter_having(pipeline_context, result);
+
+        // Reorder columns (Phase 7)
+        if (!select_order_.empty()) {
+            std::vector<vector::vector_t> reordered;
+            reordered.reserve(select_order_.size());
+            for (size_t idx : select_order_)
+                reordered.emplace_back(std::move(result.data[idx]));
+            result.data.assign(std::make_move_iterator(reordered.begin()),
+                               std::make_move_iterator(reordered.end()));
+        }
+
+        output_ = operators::make_operator_data(left_->output()->resource(), std::move(result));
+
+        // Clean up
+        group_keys_.clear();
+        group_index_.clear();
+        key_col_indices_.clear();
+        interned_str_key_map_.clear();
+        return true;
     }
 
 } // namespace components::operators

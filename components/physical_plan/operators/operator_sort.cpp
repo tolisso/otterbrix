@@ -1,5 +1,7 @@
 #include "operator_sort.hpp"
 #include <components/vector/vector_buffer.hpp>
+#include <chrono>
+#include <iostream>
 #include <numeric>
 
 namespace components::operators {
@@ -64,6 +66,15 @@ namespace components::operators {
         const auto& chunks = left_->output()->chunks();
         if (chunks.empty()) return;
 
+        // DEBUG
+        {
+            size_t total_in = 0;
+            for (const auto& c : chunks) total_in += c.size();
+            std::cout << "[SORT_OP] input: " << total_in << " rows, "
+                      << chunks.size() << " chunk(s)\n";
+        }
+        auto dbg_t0 = std::chrono::steady_clock::now();
+
         // Fast path: single chunk — use indexing sort + indexed copy (no allocation of intermediate)
         if (chunks.size() == 1) {
             const auto& chunk = chunks[0];
@@ -84,6 +95,10 @@ namespace components::operators {
                 result.data.erase(result.data.begin() + static_cast<ptrdiff_t>(expected_output_count_),
                                   result.data.end());
             }
+            std::cout << "[SORT_OP] single-chunk sort done: "
+                      << std::chrono::duration<double,std::milli>(
+                             std::chrono::steady_clock::now() - dbg_t0).count()
+                      << " ms  output=" << result.size() << " rows\n";
             output_ = operators::make_operator_data(left_->output()->resource(), std::move(result));
             return;
         }
@@ -152,6 +167,10 @@ namespace components::operators {
                               result.data.end());
         }
 
+        std::cout << "[SORT_OP] multi-chunk sort done: "
+                  << std::chrono::duration<double,std::milli>(
+                         std::chrono::steady_clock::now() - dbg_t0).count()
+                  << " ms  output=" << result.size() << " rows\n";
         output_ = operators::make_operator_data(left_->output()->resource(), std::move(result));
     }
 
