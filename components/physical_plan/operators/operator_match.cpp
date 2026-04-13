@@ -60,12 +60,16 @@ namespace components::operators {
 
             vector::indexing_vector_t all_indices(nullptr, nullptr);
             auto results = predicate->batch_check(chunk, chunk, all_indices, all_indices, chunk.size());
+            if (results.has_error()) {
+                set_error(results.error());
+                return;
+            }
 
             // Collect matching row indices, then gather all columns at once (avoids per-value boxing/unboxing)
             std::pmr::vector<uint64_t> matched(left_->output()->resource());
             matched.reserve(chunk.size());
             for (size_t i = 0; i < chunk.size(); i++) {
-                if (results[i]) {
+                if (results.value()[i]) {
                     matched.push_back(static_cast<uint64_t>(i));
                     if (!limit_.check(static_cast<int>(matched.size()))) {
                         break;
