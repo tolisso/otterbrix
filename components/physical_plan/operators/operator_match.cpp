@@ -23,8 +23,9 @@ namespace components::operators {
         , limit_(limit) {}
 
     void operator_match_t::on_execute_impl(pipeline::context_t* pipeline_context) {
-        if (!limit_.check(0)) {
-            return; // limit = 0
+        int64_t total = 0; // total matching rows seen (including offset-skipped)
+        if (!limit_.check(total)) {
+            return; // limit = 0 with no offset
         }
         if (!left_) {
             return;
@@ -65,13 +66,16 @@ namespace components::operators {
                 return;
             }
 
-            // Collect matching row indices, then gather all columns at once (avoids per-value boxing/unboxing)
+            // Collect matching row indices honoring offset/limit, then gather columns at once.
             std::pmr::vector<uint64_t> matched(left_->output()->resource());
             matched.reserve(chunk.size());
             for (size_t i = 0; i < chunk.size(); i++) {
                 if (results.value()[i]) {
-                    matched.push_back(static_cast<uint64_t>(i));
-                    if (!limit_.check(static_cast<int>(matched.size()))) {
+                    if (!limit_.is_skipping(total)) {
+                        matched.push_back(static_cast<uint64_t>(i));
+                    }
+                    ++total;
+                    if (!limit_.check(total)) {
                         break;
                     }
                 }
