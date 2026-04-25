@@ -97,17 +97,21 @@ namespace {
         if (c.size() == 0 || c.column_count() == 0) {
             return;
         }
+        // O(n) dedup via hash set (vs O(n^2) pairwise compare).
+        struct lv_hash {
+            size_t operator()(const types::logical_value_t& v) const noexcept { return v.hash(); }
+        };
+        struct lv_eq {
+            bool operator()(const types::logical_value_t& a, const types::logical_value_t& b) const {
+                return a == b;
+            }
+        };
+        std::unordered_set<types::logical_value_t, lv_hash, lv_eq> seen;
+        seen.reserve(c.size());
         std::pmr::vector<uint64_t> unique_indices(resource);
         unique_indices.reserve(c.size());
         for (uint64_t row = 0; row < c.size(); row++) {
-            bool dup = false;
-            for (auto idx : unique_indices) {
-                if (c.data[0].value(row) == c.data[0].value(idx)) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (!dup) {
+            if (seen.insert(c.data[0].value(row)).second) {
                 unique_indices.push_back(row);
             }
         }
