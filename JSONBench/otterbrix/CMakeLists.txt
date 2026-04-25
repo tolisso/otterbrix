@@ -9,12 +9,9 @@ target_compile_definitions(jsonbench_otterbrix PRIVATE
 target_link_libraries(jsonbench_otterbrix PRIVATE
     cpp_otterbrix
     otterbrix::log
-    otterbrix::collection
     otterbrix::cursor
     otterbrix::session
-    otterbrix::dispatcher
-    otterbrix::wal
-    otterbrix::disk
+    otterbrix::services
     otterbrix::locks
     spdlog::spdlog
     msgpackc-cxx

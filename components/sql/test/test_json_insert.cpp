@@ -18,8 +18,9 @@ namespace {
                                                     const char* sql) {
         transform::transformer transformer(resource);
         auto select = linitial(raw_parser(arena, sql));
-        auto result = std::get<result_view>(transformer.transform(pg_cell_to_node_cast(select)).finalize());
-        return result.node;
+        auto wrapped = transformer.transform(pg_cell_to_node_cast(select)).finalize();
+        REQUIRE(!wrapped.has_error());
+        return wrapped.value().node;
     }
 } // namespace
 

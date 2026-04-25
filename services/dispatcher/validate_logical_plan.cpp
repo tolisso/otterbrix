@@ -1034,17 +1034,18 @@ namespace services::dispatcher {
                 }
 
                 if (!node_group) {
-                    // SELECT * — check for duplicate field names (multiple types for same field)
-                    {
+                    // SELECT * (no explicit columns) — check for duplicate field names (multiple types for same field).
+                    // When node_select has expressions, the user picked specific columns (with optional ::TYPE cast),
+                    // so duplicate physical names are OK.
+                    if (!node_select || node_select->expressions().empty()) {
                         std::unordered_set<std::string> seen;
                         for (const auto& col : incoming_schema) {
                             if (!seen.insert(col.type.alias()).second) {
-                                return schema_result<named_schema>{
-                                    resource,
-                                    components::cursor::error_t{
-                                        error_code_t::schema_error,
-                                        "column '" + col.type.alias() +
-                                            "' has multiple types; use explicit column selection"}};
+                                return core::error_t(
+                                    core::error_code_t::schema_error,
+                                    std::pmr::string{"column '" + col.type.alias() +
+                                                         "' has multiple types; use explicit column selection",
+                                                     resource});
                             }
                         }
                     }

@@ -46,11 +46,11 @@ namespace components::operators::predicates {
         // Typed fast path: compare a flat column directly against a constant, no boxing.
         // Returns nullopt if the pattern doesn't match (falls back to boxing path).
         template<typename COMP, typename T>
-        simple_predicate::check_function_t make_typed_comparator(size_t col_idx, T constant) {
+        simple_predicate::row_check_fn_t make_typed_comparator(size_t col_idx, T constant) {
             return [col_idx, constant](const vector::data_chunk_t& chunk_left,
                                        const vector::data_chunk_t&,
                                        size_t index_left,
-                                       size_t) {
+                                       size_t) -> core::result_wrapper_t<bool> {
                 const auto& vec = chunk_left.data[col_idx];
                 if (!vec.validity().row_is_valid(index_left)) return false;
                 return COMP{}(vec.data<T>()[index_left], constant);
@@ -59,11 +59,11 @@ namespace components::operators::predicates {
 
         // String specialization: store std::string, compare as string_view
         template<typename COMP>
-        simple_predicate::check_function_t make_typed_comparator_str(size_t col_idx, std::string constant) {
+        simple_predicate::row_check_fn_t make_typed_comparator_str(size_t col_idx, std::string constant) {
             return [col_idx, constant = std::move(constant)](const vector::data_chunk_t& chunk_left,
                                                               const vector::data_chunk_t&,
                                                               size_t index_left,
-                                                              size_t) {
+                                                              size_t) -> core::result_wrapper_t<bool> {
                 const auto& vec = chunk_left.data[col_idx];
                 if (!vec.validity().row_is_valid(index_left)) return false;
                 return COMP{}(vec.data<std::string_view>()[index_left], std::string_view(constant));
@@ -71,7 +71,7 @@ namespace components::operators::predicates {
         }
 
         template<typename COMP>
-        std::optional<simple_predicate::check_function_t>
+        std::optional<simple_predicate::row_check_fn_t>
         try_typed_comparator(const expressions::compare_expression_ptr& expr,
                              const std::pmr::vector<types::complex_logical_type>& types_left,
                              const logical_plan::storage_parameters* parameters) {
@@ -268,37 +268,37 @@ namespace components::operators::predicates {
             }
             case compare_type::eq:
                 if (auto f = try_typed_comparator<std::equal_to<>>(expr, types_left, parameters))
-                    return {new simple_predicate(std::move(*f))};
+                    return {new simple_predicate(resource, std::move(*f))};
                 return {new simple_predicate(
                     resource,
                     make_comparator<std::equal_to<>>(resource, function_registry, expr, parameters))};
             case compare_type::ne:
                 if (auto f = try_typed_comparator<std::not_equal_to<>>(expr, types_left, parameters))
-                    return {new simple_predicate(std::move(*f))};
+                    return {new simple_predicate(resource, std::move(*f))};
                 return {new simple_predicate(
                     resource,
                     make_comparator<std::not_equal_to<>>(resource, function_registry, expr, parameters))};
             case compare_type::gt:
                 if (auto f = try_typed_comparator<std::greater<>>(expr, types_left, parameters))
-                    return {new simple_predicate(std::move(*f))};
+                    return {new simple_predicate(resource, std::move(*f))};
                 return {new simple_predicate(
                     resource,
                     make_comparator<std::greater<>>(resource, function_registry, expr, parameters))};
             case compare_type::gte:
                 if (auto f = try_typed_comparator<std::greater_equal<>>(expr, types_left, parameters))
-                    return {new simple_predicate(std::move(*f))};
+                    return {new simple_predicate(resource, std::move(*f))};
                 return {new simple_predicate(
                     resource,
                     make_comparator<std::greater_equal<>>(resource, function_registry, expr, parameters))};
             case compare_type::lt:
                 if (auto f = try_typed_comparator<std::less<>>(expr, types_left, parameters))
-                    return {new simple_predicate(std::move(*f))};
+                    return {new simple_predicate(resource, std::move(*f))};
                 return {
                     new simple_predicate(resource,
                                          make_comparator<std::less<>>(resource, function_registry, expr, parameters))};
             case compare_type::lte:
                 if (auto f = try_typed_comparator<std::less_equal<>>(expr, types_left, parameters))
-                    return {new simple_predicate(std::move(*f))};
+                    return {new simple_predicate(resource, std::move(*f))};
                 return {new simple_predicate(
                     resource,
                     make_comparator<std::less_equal<>>(resource, function_registry, expr, parameters))};
@@ -332,16 +332,18 @@ namespace components::operators::predicates {
                 // Postgres jsonb `?` semantics: missing column → false, else is_not_null.
                 auto path = std::get<expressions::key_t>(expr->left()).path();
                 if (path.empty()) {
-                    return {new simple_predicate(
-                        [](const vector::data_chunk_t&, const vector::data_chunk_t&, size_t, size_t) {
-                            return false;
-                        })};
+                    return {new simple_predicate(resource,
+                                                 [](const vector::data_chunk_t&,
+                                                    const vector::data_chunk_t&,
+                                                    size_t,
+                                                    size_t) -> core::result_wrapper_t<bool> { return false; })};
                 }
                 return {new simple_predicate(
+                    resource,
                     [column_path = std::move(path)](const vector::data_chunk_t& chunk_left,
                                                     const vector::data_chunk_t&,
                                                     size_t index_left,
-                                                    size_t) {
+                                                    size_t) -> core::result_wrapper_t<bool> {
                         return chunk_left.at(column_path)->validity().row_is_valid(index_left);
                     })};
             }

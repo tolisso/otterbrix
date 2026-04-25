@@ -130,7 +130,12 @@ namespace components::sql::transform {
             case T_TypeCast: {
                 auto cast = pg_ptr_cast<TypeCast>(node);
                 if (cast->arg && nodeTag(cast->arg) == T_ColumnRef) {
-                    auto target_type = get_type(cast->typeName);
+                    auto type_wrapped = get_type(resource_, cast->typeName);
+                    if (type_wrapped.has_error()) {
+                        error_ = type_wrapped.error();
+                        return add_param_value(node, params);
+                    }
+                    auto target_type = std::move(type_wrapped.value());
                     auto col_ref = columnref_to_field(resource_, pg_ptr_cast<ColumnRef>(cast->arg), names);
                     col_ref.deduce_side(names);
                     col_ref.field.set_cast_type(target_type);
@@ -397,7 +402,12 @@ namespace components::sql::transform {
                         case T_TypeCast: {
                             auto cast = pg_ptr_cast<TypeCast>(node);
                             if (cast->arg && nodeTag(cast->arg) == T_ColumnRef) {
-                                auto target_type = get_type(cast->typeName);
+                                auto type_wrapped = get_type(resource_, cast->typeName);
+                                if (type_wrapped.has_error()) {
+                                    error_ = type_wrapped.error();
+                                    return add_param_value(node, params);
+                                }
+                                auto target_type = std::move(type_wrapped.value());
                                 auto col_ref =
                                     columnref_to_field(resource_, pg_ptr_cast<ColumnRef>(cast->arg), names);
                                 col_ref.deduce_side(names);
