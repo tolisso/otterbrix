@@ -34,7 +34,7 @@
     разреженных \texttt{data\_chunk}.
 \end{itemize}
 
-\section{Класс \texttt{computed\_schema}}
+\section{Класс представления вычисляемой схемы}
 
 Класс \texttt{computed\_schema}
 (\texttt{components/catalog/computed\_schema.hpp}/.cpp)
@@ -42,37 +42,29 @@
 
 \subsection{Поля состояния}
 
-\begin{lstlisting}[language=C++,caption={Поля состояния computed\_schema},
-                   label={lst:cs-fields}]
-// field_name -> list of types currently present
-std::pmr::unordered_map<std::pmr::string,
-  std::pmr::vector<types::complex_logical_type>> fields_;
+Класс \texttt{computed\_schema} хранит следующее состояние:
 
-// порядок появления (field, type) пар
-std::pmr::vector<std::pair<std::pmr::string,
-  types::complex_logical_type>> column_order_;
-
-// порог продвижения (0 = нет разреженного режима)
-uint64_t sparse_threshold_{0};
-
-// счётчик ненулевых значений по phys_name
-std::pmr::unordered_map<std::pmr::string,
-  uint64_t> non_null_counts_;
-
-// флаг "всё ещё разреженное" по phys_name
-std::pmr::unordered_map<std::pmr::string,
-  bool> sparse_flags_;
-
-// порядок продвижения из sparse -> promoted
-std::pmr::vector<std::pair<std::pmr::string,
-  types::complex_logical_type>> promoted_order_;
-
-// pinned-колонки, заданные при CREATE TABLE
-std::unordered_set<std::string> pinned_field_names_;
-
-// колонки, впервые попавшие как pinned
-std::vector<sparse_column_info> newly_pinned_;
-\end{lstlisting}
+\begin{itemize}
+    \item отображение имени поля в перечень типов, в которых оно
+    встречалось;
+    \item упорядоченный список пар <<имя поля~--- тип>> в порядке
+    их первого появления;
+    \item числовой порог продвижения; нулевое значение отключает
+    режим разреженного хранения;
+    \item счётчики числа ненулевых значений по каждому физическому
+    имени колонки;
+    \item флаги разреженности по каждому физическому имени:
+    истина означает, что колонка всё ещё хранится во вспомогательной
+    таблице;
+    \item упорядоченный список колонок, продвинутых из разреженного
+    состояния в основную таблицу;
+    \item множество имён полей, объявленных закреплёнными при
+    \texttt{CREATE TABLE};
+    \item список колонок, впервые зарегистрированных в текущей
+    операции \textsc{insert} как закреплённые,~--- буфер для
+    последующего создания соответствующих физических колонок в
+    основной таблице.
+\end{itemize}
 
 Центральное понятие~--- физическое имя колонки (\texttt{phys\_name}),
 формируемое по правилу
@@ -230,7 +222,7 @@ JOIN. Это упрощает кодовую базу на текущем эта
 
 \section{SQL-трансформер}
 
-\subsection{\texttt{CREATE TABLE db.t ();}}
+\subsection{Создание таблицы с вычисляемой схемой}
 
 Для создания таблицы с вычисляемой схемой используется синтаксис с
 пустым списком колонок. SQL-трансформер
@@ -247,7 +239,7 @@ CREATE TABLE db.t ()
         pinned_columns = 'commit.rev,commit.operation');
 \end{verbatim}
 
-\subsection{\texttt{INSERT \ldots\ VALUES (json('\ldots'))}}
+\subsection{Вставка JSON-документов одним выражением}
 
 Этот синтаксис предоставляет удобный способ вставки JSON-документов
 напрямую из SQL. SQL-трансформер детектирует конструкцию
@@ -326,22 +318,18 @@ snapshot~isolation: каждая транзакция видит консист�
 Для реализации разработано обширное тестовое покрытие, включающее:
 
 \begin{itemize}
-    \item \textbf{Модульные тесты}
-    (\texttt{components/catalog/tests/},
-    \texttt{components/sql/test/})~--- проверка корректности
+    \item \textbf{Модульные тесты}~--- проверка корректности
     \texttt{computed\_schema} в изоляции; распознавание SQL-
     конструкций \texttt{CREATE TABLE db.t~()} и
     \texttt{INSERT \ldots\ VALUES (json(\ldots))}.
-    \item \textbf{Интеграционные тесты}
-    (\texttt{integration/cpp/test/test\_computed\_schema.cpp})~---
-    более 30~сценариев: базовый \textsc{insert}/\textsc{select} с
-    автоматической эволюцией схемы; эволюция между батчами;
-    разреженное хранение; продвижение с миграцией данных;
-    pinned-колонки; запросы, смешивающие плотные и разреженные
-    поля; граничные случаи.
-    \item \textbf{Тесты производительности}
-    (\texttt{JSONBench/otterbrix/jsonbench.cpp})~--- сравнение с
-    ClickHouse и PostgreSQL на стандартном датасете JSONBench.
+    \item \textbf{Интеграционные тесты}~--- более 30~сценариев:
+    базовый \textsc{insert}/\textsc{select} с автоматической
+    эволюцией схемы; эволюция между батчами; разреженное хранение;
+    продвижение с миграцией данных; pinned-колонки; запросы,
+    смешивающие плотные и разреженные поля; граничные случаи.
+    \item \textbf{Тесты производительности}~--- сравнение трёх
+    конфигураций Otterbrix между собой и с DuckDB на стандартном
+    датасете JSONBench.
 \end{itemize}
 
 Полный прогон всех тестов в конфигурации Debug занимает около
