@@ -1496,6 +1496,10 @@ namespace services::dispatcher {
                     for (auto& sort_child : node_sort->expressions()) {
                         auto* sort_expr = static_cast<sort_expression_t*>(sort_child.get());
                         auto& skey = sort_expr->key();
+                        // Skip arithmetic/computed sort expressions — those have no single column key
+                        if (skey.storage().empty()) {
+                            continue;
+                        }
                         // Try resolving in the GROUP result schema first
                         auto field_in_result = impl::find_types(resource, skey, result);
                         if (!field_in_result.has_error() && !field_in_result.value().empty()) {
