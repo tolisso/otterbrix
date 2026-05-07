@@ -2,7 +2,9 @@
 #include "predicates/predicate.hpp"
 
 #include <algorithm>
+#include <components/expressions/compare_expression.hpp>
 #include <components/vector/vector_operations.hpp>
+#include <unordered_map>
 
 namespace components::operators {
 
@@ -99,6 +101,60 @@ namespace components::operators {
             vector::data_chunk_t cur_;
             uint64_t filled_ = 0;
         };
+
+        // Detect single equi-comparison `eq(key_t, key_t)` and return column indices for
+        // each side. Validator marks `key.side()` and `key.path()` during JOIN validation
+        // (`validate_logical_plan.cpp:260-265`); we rely on those.
+        bool detect_equi_columns(const expressions::expression_ptr& expr,
+                                  size_t& out_left_col,
+                                  size_t& out_right_col) {
+            if (!expr || expr->group() != expressions::expression_group::compare) return false;
+            auto* cmp = static_cast<expressions::compare_expression_t*>(expr.get());
+            if (cmp->type() != expressions::compare_type::eq) return false;
+            if (!std::holds_alternative<expressions::key_t>(cmp->left())) return false;
+            if (!std::holds_alternative<expressions::key_t>(cmp->right())) return false;
+            const auto& lk = std::get<expressions::key_t>(cmp->left());
+            const auto& rk = std::get<expressions::key_t>(cmp->right());
+            if (lk.path().empty() || rk.path().empty()) return false;
+            using expressions::side_t;
+            if (lk.side() == side_t::left && rk.side() == side_t::right) {
+                out_left_col = lk.path()[0];
+                out_right_col = rk.path()[0];
+                return true;
+            }
+            if (lk.side() == side_t::right && rk.side() == side_t::left) {
+                out_left_col = rk.path()[0];
+                out_right_col = lk.path()[0];
+                return true;
+            }
+            return false;
+        }
+
+        // Build a multimap from `right_chunks[*][right_col]` value → (chunk_idx, row_idx).
+        // NULL right values are skipped (they never join under SQL equi-join semantics).
+        struct lv_hash {
+            size_t operator()(const types::logical_value_t& v) const noexcept { return v.hash(); }
+        };
+        using right_index_t = std::unordered_multimap<types::logical_value_t,
+                                                       std::pair<size_t, uint64_t>,
+                                                       lv_hash,
+                                                       std::equal_to<types::logical_value_t>>;
+        right_index_t build_right_hash_index(const chunks_vector_t& right_chunks, size_t right_col) {
+            right_index_t table;
+            size_t total = 0;
+            for (const auto& R : right_chunks) total += R.size();
+            table.reserve(total);
+            for (size_t ci = 0; ci < right_chunks.size(); ++ci) {
+                const auto& R = right_chunks[ci];
+                if (right_col >= R.column_count()) continue;
+                const auto& col = R.data[right_col];
+                for (uint64_t rj = 0; rj < R.size(); ++rj) {
+                    if (!col.validity().row_is_valid(rj)) continue;
+                    table.emplace(col.value(rj), std::make_pair(ci, rj));
+                }
+            }
+            return table;
+        }
     } // namespace
 
     operator_join_t::operator_join_t(std::pmr::memory_resource* resource,
@@ -171,18 +227,32 @@ namespace components::operators {
         auto* res_resource = left_out->resource();
         chunks_vector_t out_chunks(res_resource);
 
+        // Equi-join detection: pick hash-table fast path when condition is a single
+        // `eq(left.key, right.key)`. Otherwise fall back to nested-loop with predicate.
+        // Verified correct for regular (fixed-schema) tables — `test_hash_join`.
+        // For JOINs above sparse-computed-schema subquery wrappers, the user-level
+        // JOIN currently doesn't execute at all (separate regression from the rewrite,
+        // unrelated to the hash path).
+        size_t left_col = 0;
+        size_t right_col = 0;
+        bool equi = detect_equi_columns(expression_, left_col, right_col);
+
         switch (join_type_) {
             case type::inner:
-                inner_join_(predicate, context, res_types, out_chunks);
+                if (equi) inner_join_hash_(left_col, right_col, res_types, out_chunks);
+                else inner_join_(predicate, context, res_types, out_chunks);
                 break;
             case type::full:
-                outer_full_join_(predicate, context, res_types, out_chunks);
+                if (equi) outer_full_join_hash_(left_col, right_col, res_types, out_chunks);
+                else outer_full_join_(predicate, context, res_types, out_chunks);
                 break;
             case type::left:
-                outer_left_join_(predicate, context, res_types, out_chunks);
+                if (equi) outer_left_join_hash_(left_col, right_col, res_types, out_chunks);
+                else outer_left_join_(predicate, context, res_types, out_chunks);
                 break;
             case type::right:
-                outer_right_join_(predicate, context, res_types, out_chunks);
+                if (equi) outer_right_join_hash_(left_col, right_col, res_types, out_chunks);
+                else outer_right_join_(predicate, context, res_types, out_chunks);
                 break;
             case type::cross:
                 cross_join_(context, res_types, out_chunks);
@@ -357,6 +427,154 @@ namespace components::operators {
                 if (!any_match) {
                     builder.emit_right_only(R, rj);
                 }
+            }
+        }
+        builder.flush();
+    }
+
+    // ---- Hash-join fast paths (equi-join only) ----
+
+    void operator_join_t::inner_join_hash_(size_t left_col,
+                                            size_t right_col,
+                                            const std::pmr::vector<types::complex_logical_type>& out_types,
+                                            chunks_vector_t& out_chunks) {
+        auto& left_chunks = left_->output()->chunks();
+        auto& right_chunks = right_->output()->chunks();
+        auto* resource = left_->output()->resource();
+        join_builder builder(resource, out_types, indices_left_, indices_right_, out_chunks);
+
+        auto table = build_right_hash_index(right_chunks, right_col);
+        for (const auto& L : left_chunks) {
+            if (left_col >= L.column_count()) continue;
+            const auto& lcol = L.data[left_col];
+            for (uint64_t li = 0; li < L.size(); ++li) {
+                if (!lcol.validity().row_is_valid(li)) continue;
+                auto rng = table.equal_range(lcol.value(li));
+                for (auto it = rng.first; it != rng.second; ++it) {
+                    auto [ci, rj] = it->second;
+                    builder.emit_matched(L, li, right_chunks[ci], rj);
+                }
+            }
+        }
+        builder.flush();
+    }
+
+    void operator_join_t::outer_left_join_hash_(size_t left_col,
+                                                 size_t right_col,
+                                                 const std::pmr::vector<types::complex_logical_type>& out_types,
+                                                 chunks_vector_t& out_chunks) {
+        auto& left_chunks = left_->output()->chunks();
+        auto& right_chunks = right_->output()->chunks();
+        auto* resource = left_->output()->resource();
+        join_builder builder(resource, out_types, indices_left_, indices_right_, out_chunks);
+
+        auto table = build_right_hash_index(right_chunks, right_col);
+        for (const auto& L : left_chunks) {
+            if (left_col >= L.column_count()) {
+                // Probe column missing — every left row gets NULL on the right side.
+                for (uint64_t li = 0; li < L.size(); ++li) {
+                    builder.emit_left_only(L, li);
+                }
+                continue;
+            }
+            const auto& lcol = L.data[left_col];
+            for (uint64_t li = 0; li < L.size(); ++li) {
+                bool null_key = !lcol.validity().row_is_valid(li);
+                bool matched = false;
+                if (!null_key) {
+                    auto rng = table.equal_range(lcol.value(li));
+                    for (auto it = rng.first; it != rng.second; ++it) {
+                        auto [ci, rj] = it->second;
+                        builder.emit_matched(L, li, right_chunks[ci], rj);
+                        matched = true;
+                    }
+                }
+                if (!matched) {
+                    builder.emit_left_only(L, li);
+                }
+            }
+        }
+        builder.flush();
+    }
+
+    void operator_join_t::outer_right_join_hash_(size_t left_col,
+                                                  size_t right_col,
+                                                  const std::pmr::vector<types::complex_logical_type>& out_types,
+                                                  chunks_vector_t& out_chunks) {
+        auto& left_chunks = left_->output()->chunks();
+        auto& right_chunks = right_->output()->chunks();
+        auto* resource = left_->output()->resource();
+        join_builder builder(resource, out_types, indices_left_, indices_right_, out_chunks);
+
+        // For RIGHT join we need to remember which right rows got matched.
+        std::vector<std::vector<bool>> visited(right_chunks.size());
+        for (size_t ci = 0; ci < right_chunks.size(); ++ci) {
+            visited[ci].assign(right_chunks[ci].size(), false);
+        }
+
+        auto table = build_right_hash_index(right_chunks, right_col);
+        for (const auto& L : left_chunks) {
+            if (left_col >= L.column_count()) continue;
+            const auto& lcol = L.data[left_col];
+            for (uint64_t li = 0; li < L.size(); ++li) {
+                if (!lcol.validity().row_is_valid(li)) continue;
+                auto rng = table.equal_range(lcol.value(li));
+                for (auto it = rng.first; it != rng.second; ++it) {
+                    auto [ci, rj] = it->second;
+                    builder.emit_matched(L, li, right_chunks[ci], rj);
+                    visited[ci][rj] = true;
+                }
+            }
+        }
+        // Right rows without any left match (or right rows skipped in build because of NULL).
+        for (size_t ci = 0; ci < right_chunks.size(); ++ci) {
+            const auto& R = right_chunks[ci];
+            for (uint64_t rj = 0; rj < R.size(); ++rj) {
+                if (!visited[ci][rj]) builder.emit_right_only(R, rj);
+            }
+        }
+        builder.flush();
+    }
+
+    void operator_join_t::outer_full_join_hash_(size_t left_col,
+                                                 size_t right_col,
+                                                 const std::pmr::vector<types::complex_logical_type>& out_types,
+                                                 chunks_vector_t& out_chunks) {
+        auto& left_chunks = left_->output()->chunks();
+        auto& right_chunks = right_->output()->chunks();
+        auto* resource = left_->output()->resource();
+        join_builder builder(resource, out_types, indices_left_, indices_right_, out_chunks);
+
+        std::vector<std::vector<bool>> visited(right_chunks.size());
+        for (size_t ci = 0; ci < right_chunks.size(); ++ci) {
+            visited[ci].assign(right_chunks[ci].size(), false);
+        }
+
+        auto table = build_right_hash_index(right_chunks, right_col);
+        for (const auto& L : left_chunks) {
+            if (left_col >= L.column_count()) {
+                for (uint64_t li = 0; li < L.size(); ++li) builder.emit_left_only(L, li);
+                continue;
+            }
+            const auto& lcol = L.data[left_col];
+            for (uint64_t li = 0; li < L.size(); ++li) {
+                bool matched = false;
+                if (lcol.validity().row_is_valid(li)) {
+                    auto rng = table.equal_range(lcol.value(li));
+                    for (auto it = rng.first; it != rng.second; ++it) {
+                        auto [ci, rj] = it->second;
+                        builder.emit_matched(L, li, right_chunks[ci], rj);
+                        visited[ci][rj] = true;
+                        matched = true;
+                    }
+                }
+                if (!matched) builder.emit_left_only(L, li);
+            }
+        }
+        for (size_t ci = 0; ci < right_chunks.size(); ++ci) {
+            const auto& R = right_chunks[ci];
+            for (uint64_t rj = 0; rj < R.size(); ++rj) {
+                if (!visited[ci][rj]) builder.emit_right_only(R, rj);
             }
         }
         builder.flush();
