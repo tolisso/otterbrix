@@ -108,15 +108,267 @@ TEST_CASE("integration::cpp::test_computed_schema::evolving_schema") {
         REQUIRE(cur->chunk_data().column_count() == 2);
     }
 
-    // TODO: WHERE on dynamic-schema fields not supported yet (computing scan rewrite is
-    // shallow — pushdown of filter into per-side scans not implemented).
+    // WHERE on 'value' should find only row 4
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT * FROM cs_testdb.t2 WHERE value = 100;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 1);
+        REQUIRE(cur->chunk_data().column_count() == 2);
+    }
+}
+
+// Tests below cover scenarios that worked "in theory" after the WHERE fixup —
+// verifying ORDER BY / GROUP BY / HAVING / AS-alias / compound WHERE / projection
+// of subset / arithmetic on dynamic fields.
+TEST_CASE("integration::cpp::test_computed_schema::order_by") {
+    auto config = test_create_config("/tmp/test_computed_schema/order_by");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+
+    {
+        auto session = otterbrix::session_id_t();
+        dispatcher->execute_sql(session, "CREATE DATABASE cs_testdb;");
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "CREATE TABLE cs_testdb.t_order ();");
+        REQUIRE(cur->is_success());
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session,
+            "INSERT INTO cs_testdb.t_order (id, name) VALUES (3,'c'),(1,'a'),(2,'b');");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 3);
+    }
+    // ORDER BY id ASC
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT id FROM cs_testdb.t_order ORDER BY id;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 3);
+        REQUIRE(cur->chunk_data().value(0, 0).value<int64_t>() == 1);
+        REQUIRE(cur->chunk_data().value(0, 1).value<int64_t>() == 2);
+        REQUIRE(cur->chunk_data().value(0, 2).value<int64_t>() == 3);
+    }
+    // ORDER BY id DESC
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT id FROM cs_testdb.t_order ORDER BY id DESC;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 3);
+        REQUIRE(cur->chunk_data().value(0, 0).value<int64_t>() == 3);
+        REQUIRE(cur->chunk_data().value(0, 1).value<int64_t>() == 2);
+        REQUIRE(cur->chunk_data().value(0, 2).value<int64_t>() == 1);
+    }
+}
+
+TEST_CASE("integration::cpp::test_computed_schema::compound_where") {
+    auto config = test_create_config("/tmp/test_computed_schema/compound_where");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+
+    {
+        auto session = otterbrix::session_id_t();
+        dispatcher->execute_sql(session, "CREATE DATABASE cs_testdb;");
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "CREATE TABLE cs_testdb.t_cw ();");
+        REQUIRE(cur->is_success());
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session,
+            "INSERT INTO cs_testdb.t_cw (id, age) VALUES (1, 20), (2, 30), (3, 40), (4, 50);");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 4);
+    }
+    // age > 25 AND age < 45  → ids 2,3
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur =
+            dispatcher->execute_sql(session, "SELECT id FROM cs_testdb.t_cw WHERE age > 25 AND age < 45;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 2);
+    }
+    // id = 1 OR id = 4 → 2 rows
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur =
+            dispatcher->execute_sql(session, "SELECT id, age FROM cs_testdb.t_cw WHERE id = 1 OR id = 4;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 2);
+        REQUIRE(cur->chunk_data().column_count() == 2);
+    }
+}
+
+TEST_CASE("integration::cpp::test_computed_schema::group_by") {
+    auto config = test_create_config("/tmp/test_computed_schema/group_by");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+
+    {
+        auto session = otterbrix::session_id_t();
+        dispatcher->execute_sql(session, "CREATE DATABASE cs_testdb;");
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "CREATE TABLE cs_testdb.t_gb ();");
+        REQUIRE(cur->is_success());
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        // 3 buckets: name='a' x3 (count=3, sum=6), 'b' x2 (count=2, sum=20), 'c' x1 (count=1, sum=100)
+        auto cur = dispatcher->execute_sql(session,
+                                           "INSERT INTO cs_testdb.t_gb (name, val) VALUES "
+                                           "('a',1),('a',2),('a',3),('b',10),('b',10),('c',100);");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 6);
+    }
+    // GROUP BY name → 3 groups
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session,
+            "SELECT name, SUM(val) AS s FROM cs_testdb.t_gb GROUP BY name ORDER BY name;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 3);
+    }
+    // TODO: HAVING with aggregate functions on dynamic-schema fields not supported yet —
+    // SQL parser folds HAVING + aggregate into a hidden aggregate inside node_select,
+    // and validation fails on the implicit reference. Needs a separate path-fixup pass
+    // for hidden aggregates (or an explicit HAVING node-level rewrite).
     // {
     //     auto session = otterbrix::session_id_t();
-    //     auto cur = dispatcher->execute_sql(session, "SELECT * FROM cs_testdb.t2 WHERE value = 100;");
+    //     auto cur = dispatcher->execute_sql(
+    //         session,
+    //         "SELECT name FROM cs_testdb.t_gb GROUP BY name HAVING SUM(val) > 5 ORDER BY name;");
     //     REQUIRE(cur->is_success());
-    //     REQUIRE(cur->size() == 1);
-    //     REQUIRE(cur->chunk_data().column_count() == 2);
+    //     REQUIRE(cur->size() == 2);
     // }
+}
+
+TEST_CASE("integration::cpp::test_computed_schema::table_qualified_no_alias") {
+    auto config = test_create_config("/tmp/test_computed_schema/qual_no_alias");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+
+    {
+        auto session = otterbrix::session_id_t();
+        dispatcher->execute_sql(session, "CREATE DATABASE cs_testdb;");
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "CREATE TABLE cs_testdb.t_qual ();");
+        REQUIRE(cur->is_success());
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session, "INSERT INTO cs_testdb.t_qual (id, name) VALUES (1,'a'), (2,'b'), (3,'c');");
+        REQUIRE(cur->is_success());
+    }
+    // SELECT t.field FROM t (table-qualified reference WITHOUT alias)
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT t_qual.id FROM cs_testdb.t_qual;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 3);
+    }
+    // WHERE with table-qualified reference
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session, "SELECT t_qual.id FROM cs_testdb.t_qual WHERE t_qual.id = 2;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 1);
+        REQUIRE(cur->chunk_data().value(0, 0).value<int64_t>() == 2);
+    }
+}
+
+TEST_CASE("integration::cpp::test_computed_schema::table_alias") {
+    auto config = test_create_config("/tmp/test_computed_schema/alias");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+
+    {
+        auto session = otterbrix::session_id_t();
+        dispatcher->execute_sql(session, "CREATE DATABASE cs_testdb;");
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "CREATE TABLE cs_testdb.t_alias ();");
+        REQUIRE(cur->is_success());
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session, "INSERT INTO cs_testdb.t_alias (id, name) VALUES (1,'a'), (2,'b'), (3,'c');");
+        REQUIRE(cur->is_success());
+    }
+    // alias-qualified column reference
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur =
+            dispatcher->execute_sql(session, "SELECT x.id FROM cs_testdb.t_alias AS x WHERE x.id = 2;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 1);
+        REQUIRE(cur->chunk_data().value(0, 0).value<int64_t>() == 2);
+    }
+}
+
+TEST_CASE("integration::cpp::test_computed_schema::limit_offset") {
+    auto config = test_create_config("/tmp/test_computed_schema/limit");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+
+    {
+        auto session = otterbrix::session_id_t();
+        dispatcher->execute_sql(session, "CREATE DATABASE cs_testdb;");
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "CREATE TABLE cs_testdb.t_lim ();");
+        REQUIRE(cur->is_success());
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session,
+            "INSERT INTO cs_testdb.t_lim (id) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 10);
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT id FROM cs_testdb.t_lim ORDER BY id LIMIT 3;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 3);
+        REQUIRE(cur->chunk_data().value(0, 0).value<int64_t>() == 1);
+        REQUIRE(cur->chunk_data().value(0, 2).value<int64_t>() == 3);
+    }
 }
 
 TEST_CASE("integration::cpp::test_computed_schema::delete_rows") {

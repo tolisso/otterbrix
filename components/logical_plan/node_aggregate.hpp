@@ -27,9 +27,18 @@ namespace components::logical_plan {
         bool is_raw_computing_scan() const { return raw_computing_scan_; }
         void set_raw_computing_scan(bool v) { raw_computing_scan_ = v; }
 
+        // Marks the subquery aggregate built by expand_computing_tables. Used by the
+        // post-validate path-fixup pass to know where computing-schema decompositions live
+        // so it can rebase outer-level expression paths through their inner select_node
+        // projection (validator resolves user-side keys against the join-internal schema,
+        // not the post-projection one).
+        bool is_computing_subquery_wrapper() const { return computing_subquery_wrapper_; }
+        void set_computing_subquery_wrapper(bool v) { computing_subquery_wrapper_ = v; }
+
     private:
         bool distinct_{false};
         bool raw_computing_scan_{false};
+        bool computing_subquery_wrapper_{false};
         std::vector<size_t> projected_cols_;
         hash_t hash_impl() const override;
         std::string to_string_impl() const override;

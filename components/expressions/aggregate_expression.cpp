@@ -43,6 +43,8 @@ namespace components::expressions {
 
     const key_t& aggregate_expression_t::key() const { return key_; }
 
+    key_t& aggregate_expression_t::key() { return key_; }
+
     const std::string& aggregate_expression_t::function_name() const { return function_name_; }
 
     void aggregate_expression_t::add_function_uid(compute::function_uid uid) { function_uid_ = uid; }

@@ -19,6 +19,7 @@ namespace components::expressions {
         aggregate_expression_t(std::pmr::memory_resource* resource, const std::string& function_name, const key_t& key);
 
         const key_t& key() const;
+        key_t& key();
         const std::string& function_name() const;
         void add_function_uid(compute::function_uid uid);
         compute::function_uid function_uid() const;

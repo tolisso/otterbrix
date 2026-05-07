@@ -337,6 +337,11 @@ namespace services::dispatcher {
                     if (schema_res.has_error()) {
                         error = schema_res.error();
                     } else {
+                        // Rebase outer-level expression paths through computing-subquery
+                        // wrappers' projections. Validator resolves user-side keys against
+                        // the JOIN-internal schema; my_select_node prunes that to user-fields,
+                        // so the indices need translation before physical-plan generation.
+                        components::planner::fixup_computing_paths(logic_plan);
                         // Post-validate optimization pass: column pruning, etc.
                         // Runs here because it needs paths resolved by the schema validator.
                         logic_plan = components::planner::post_validate_optimize(resource(), logic_plan, &catalog_);
