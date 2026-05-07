@@ -335,7 +335,12 @@ namespace services::dispatcher {
                 // INSERT into computing tables is handled separately (case insert_t below)
                 // and is not subject to this rewrite.
                 if (logic_plan->type() != node_type::insert_t) {
-                    logic_plan = components::planner::expand_computing_tables(resource(), logic_plan, catalog_);
+                    core::error_t expand_err = core::error_t::no_error();
+                    logic_plan = components::planner::expand_computing_tables(
+                        resource(), logic_plan, catalog_, &expand_err);
+                    if (expand_err.contains_error()) {
+                        co_return make_cursor(resource(), std::move(expand_err));
+                    }
                 }
                 error = validate_types(resource(), catalog_, logic_plan.get());
                 if (!error.contains_error()) {
@@ -810,13 +815,21 @@ namespace services::dispatcher {
                     }
 
                     update_result_.clear();
-                    exec_result = {make_cursor(resource(),
-                                               any_error
-                                                   ? core::error_t(core::error_code_t::other_error,
-                                                                   std::pmr::string{"computing DELETE: partial failure",
-                                                                                    resource()})
-                                                   : core::error_t::no_error()),
-                                   {}};
+                    if (any_error) {
+                        exec_result = {make_cursor(resource(),
+                                                   core::error_t(core::error_code_t::other_error,
+                                                                 std::pmr::string{"computing DELETE: partial failure",
+                                                                                  resource()})),
+                                       {}};
+                    } else {
+                        // Return a cursor whose size == number of rows deleted (matches the
+                        // standard DELETE contract: cursor.size() = affected row count).
+                        std::pmr::vector<components::types::complex_logical_type> empty_types(resource());
+                        components::vector::data_chunk_t affected(resource(), empty_types,
+                                                                   row_ids_to_delete.size());
+                        affected.set_cardinality(row_ids_to_delete.size());
+                        exec_result = {make_cursor(resource(), std::move(affected)), {}};
+                    }
                     break;
                 }
                 exec_result = co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);

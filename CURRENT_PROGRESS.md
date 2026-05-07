@@ -82,7 +82,7 @@ CMakeLists.txt                                       — -Wno-mismatched-new-del
 | `table_alias` | `SELECT x.a FROM t AS x WHERE x.a=Y` | ✅ |
 | `limit_offset` | `LIMIT 3` после ORDER BY | ✅ |
 | `delete_rows` | `DELETE FROM t WHERE id <= 2` | ✅ |
-| `multi_type_field` | Поле с двумя типами одновременно (`val::BIGINT` и `val::STRING`) | ❌ TODO |
+| `multi_type_field` | Поле с двумя типами одновременно (`val::BIGINT` и `val::STRING`) | ✅ |
 
 ## Что предстоит сделать
 
@@ -110,18 +110,23 @@ UPDATE `SET field = X` на side нуждается в "upsert по row_id" — 
 Подход аналогичный DELETE: SELECT row_id WHERE expr → для каждого row_id выполнить
 upsert на side. Объём средний.
 
-### 2. multi-type field (`val::BIGINT` и `val::STRING` одновременно)
+### 2. ~~multi-type field~~ ✅ работает
 
-Сейчас тест `multi_type_field` ожидает ошибку при `SELECT *` если поле имеет 2 типа, и SUCCESS на explicit cast (`SELECT id, val::string FROM t4`).
+Реализовано вместе с performance-pushdown'ом (#7) в `expand_one_aggregate`:
+1. Walker `collect_field_refs` обходит user-children (match/select/sort/group/having)
+   собирая `{field_name → {any_cast?, casts:set<logical_type>}}` + `has_star`.
+2. Special cases: empty select_node = `SELECT *`; aggregate без select-child тоже star.
+3. SELECT 4-arg form `make_scalar_expression(get_field, alias_key, field_key)` —
+   `key()` это alias, реальная ссылка с cast в `params()[0]`. Walker детектит и
+   обходит params, пропуская alias-key.
+4. В `expand_one_aggregate` для каждого `(field, type)` из `latest_types_struct`:
+   - star + multi-type → schema_error.
+   - any_cast + multi-type → field_not_exists.
+   - иначе включаем side если referenced (single-type или cast match).
+5. `expand_computing_tables` принимает `core::error_t* out_error` — ошибка
+   пробрасывается в dispatcher и возвращается клиенту.
 
-В нашей schema `(field, type)` — каждое — отдельная side-таблица. Significantly это уже работает на стороне INSERT: в INSERT side-tables `_dyn_t__val__14` (BIGINT) и `_dyn_t__val__35` (STRING) обе создаются. Но `latest_types_struct()` вернёт оба type-варианта.
-
-**Что нужно:**
-- В `expand_one_aggregate` обнаружить ситуацию multi-type: если `field` встречается с >1 типом — какой type выбирать?
-- На уровне SQL: explicit cast `val::bigint` → проектировать только `_dyn_t__val__14`. Без cast — вернуть error «ambiguous field».
-- Cast-cast handling в SQL уже работает на regular tables; нужно проверить что после моего expand он продолжает работать.
-
-**Объём:** средний. Скорее всего достаточно изменить логику выбора side-таблицы по cast в expand_one_aggregate.
+Покрывается тестом `multi_type_field` (31 assertion).
 
 ### 3. JOIN computing с regular / computing с computing
 
@@ -167,15 +172,12 @@ upsert на side. Объём средний.
 - Запустить эти тесты под gdb / ASan, получить точный stack trace.
 - Скорее всего корни — в одном из (3, 4) выше.
 
-### 7. Производительность: pushdown по полям
+### 7. ~~Производительность: pushdown по полям~~ ✅ сделано (вместе с multi-type)
 
-Сейчас expand JOIN-ит **все** side-таблицы независимо от того, упоминаются ли их поля в SELECT. Для широкой computing-таблицы (10+ полей) и SELECT всего одного — мы делаем 10 JOIN-ов вхолостую.
-
-**Что нужно:**
-- В `expand_one_aggregate`: до строительства JOIN-цепочки, обойти исходное aggregate-поддерево и собрать все упоминаемые поля (от expressions). Если есть `*` — все. Иначе — только упомянутые. JOIN-ить только нужные side-таблицы.
-- Вспомогательный walker уже частично есть в `column_pruning.cpp::collect_cols_from_node` — можно использовать как образец.
-
-**Объём:** средний. Аккуратное обхождение всех expression-форм + handling `*`.
+Реализовано в рамках задачи #2: walker собирает referenced fields, `expand_one_aggregate`
+JOIN-ит только sides где упомянутые поля. Для широкой computing-таблицы (10+ полей)
+и `SELECT * FROM t WHERE a = X` без `*`-формы — JOIN только нужных side. С `SELECT *`
+— все side (как раньше), но без избыточного UNION-merge.
 
 ## Дизайн-границы / открытые вопросы
 
@@ -189,5 +191,3 @@ upsert на side. Объём средний.
 1. **UPDATE на computing** — DELETE сделан, UPDATE по аналогии (upsert по row_id для каждой side).
 2. **Регрессии в существующих тестах (#6)** — диагностика под gdb.
 3. **JOIN computing с regular (#3)** — следующий по полезности.
-4. **multi-type field (#2)** — корнер-кейс.
-5. **Performance pushdown (#7)** — оптимизация после функциональной полноты.
