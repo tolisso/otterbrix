@@ -20,8 +20,16 @@ namespace components::logical_plan {
         const std::vector<size_t>& projected_cols() const { return projected_cols_; }
         void set_projected_cols(std::vector<size_t> cols) { projected_cols_ = std::move(cols); }
 
+        // Marks an aggregate that physically scans a computing table's main storage as a
+        // plain table (schema = [row_id]). Set by the computing-schema expansion in planner
+        // to break recursion: validator/optimizer for raw-scan aggregates skip the
+        // `latest_types_struct` path and treat it as a regular table.
+        bool is_raw_computing_scan() const { return raw_computing_scan_; }
+        void set_raw_computing_scan(bool v) { raw_computing_scan_ = v; }
+
     private:
         bool distinct_{false};
+        bool raw_computing_scan_{false};
         std::vector<size_t> projected_cols_;
         hash_t hash_impl() const override;
         std::string to_string_impl() const override;

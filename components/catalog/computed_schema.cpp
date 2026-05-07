@@ -76,4 +76,18 @@ namespace components::catalog {
         }
         return false;
     }
+
+    std::string computed_schema::side_table_name(std::string_view main_table,
+                                                  std::string_view field,
+                                                  const types::complex_logical_type& type) {
+        std::string result;
+        result.reserve(8 + main_table.size() + field.size() + 6);
+        result.append("_dyn_");
+        result.append(main_table);
+        result.append("__");
+        result.append(field);
+        result.append("__");
+        result.append(std::to_string(static_cast<int>(type.type())));
+        return result;
+    }
 } // namespace components::catalog

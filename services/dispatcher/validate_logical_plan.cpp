@@ -1048,7 +1048,14 @@ namespace services::dispatcher {
                 } else if (!node->collection_full_name().database.empty()) {
                     // there will be a scan
                     table_id id(resource, node->collection_full_name());
-                    if (catalog.table_exists(id)) {
+                    auto* agg_node = reinterpret_cast<node_aggregate_t*>(node);
+                    if (agg_node->is_raw_computing_scan()) {
+                        // Computing main physically holds only `row_id BIGINT`; sides are
+                        // joined in the subquery built by expand_computing_tables.
+                        complex_logical_type rid_t(logical_type::BIGINT);
+                        rid_t.set_alias("row_id");
+                        table_schema.emplace_back(type_from_t{node->collection_name(), rid_t});
+                    } else if (catalog.table_exists(id)) {
                         for (const auto& column : catalog.get_table_schema(id).columns()) {
                             table_schema.emplace_back(type_from_t{node->collection_name(), column.type()});
                         }

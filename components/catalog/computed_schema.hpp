@@ -1,6 +1,8 @@
 #pragma once
 
 #include <components/types/types.hpp>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -24,6 +26,13 @@ namespace components::catalog {
 
         [[nodiscard]] bool has_type(const std::pmr::string& field_name,
                                     const types::complex_logical_type& type) const;
+
+        // Canonical side-table name for one (field, type) pair of a computing table.
+        // Pattern: "_dyn_<main_table>__<field>__<type_id>" — keeps multi-type fields
+        // disambiguated by logical_type id, and prefix `_dyn_` is reserved for side tables.
+        [[nodiscard]] static std::string side_table_name(std::string_view main_table,
+                                                          std::string_view field,
+                                                          const types::complex_logical_type& type);
 
     private:
         // field_name -> list of types currently present

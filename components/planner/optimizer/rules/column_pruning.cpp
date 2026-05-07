@@ -132,6 +132,11 @@ namespace components::planner::optimizer {
             if (node->type() == logical_plan::node_type::aggregate_t) {
                 if (!catalog) return 0;
                 catalog::table_id id(node->resource(), node->collection_full_name());
+                auto* agg = reinterpret_cast<const logical_plan::node_aggregate_t*>(node.get());
+                if (agg->is_raw_computing_scan()) {
+                    // Computing main is physically a single-column (row_id) table.
+                    return 1;
+                }
                 if (catalog->table_exists(id)) {
                     return catalog->get_table_schema(id).columns().size();
                 }

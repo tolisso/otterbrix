@@ -376,7 +376,13 @@ namespace otterbrix {
             for (const auto& info : collection_infos) {
                 if (info.storage_mode == services::disk::table_storage_mode_t::IN_MEMORY) {
                     if (info.columns.empty()) {
-                        disk_ptr->create_storage_sync(info.name);
+                        // Computing main table now has a single row_id BIGINT NOT NULL column.
+                        std::vector<components::table::column_definition_t> row_id_cols;
+                        components::types::complex_logical_type row_id_type(
+                            components::types::logical_type::BIGINT);
+                        row_id_type.set_alias("row_id");
+                        row_id_cols.emplace_back("row_id", row_id_type, /*not_null=*/true, std::nullopt);
+                        disk_ptr->create_storage_with_columns_sync(info.name, std::move(row_id_cols));
                     } else {
                         std::vector<components::table::column_definition_t> col_defs;
                         col_defs.reserve(info.columns.size());

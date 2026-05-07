@@ -3,6 +3,7 @@ project(planner CXX)
 set(SOURCE_${PROJECT_NAME}
         planner.cpp
         optimizer.cpp
+        expand_computing.cpp
         optimizer/rules/constant_folding.cpp
         optimizer/rules/column_pruning.cpp
 )
