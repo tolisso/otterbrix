@@ -247,18 +247,17 @@ TEST_CASE("integration::cpp::test_computed_schema::group_by") {
         REQUIRE(cur->is_success());
         REQUIRE(cur->size() == 3);
     }
-    // TODO: HAVING with aggregate functions on dynamic-schema fields not supported yet —
-    // SQL parser folds HAVING + aggregate into a hidden aggregate inside node_select,
-    // and validation fails on the implicit reference. Needs a separate path-fixup pass
-    // for hidden aggregates (or an explicit HAVING node-level rewrite).
-    // {
-    //     auto session = otterbrix::session_id_t();
-    //     auto cur = dispatcher->execute_sql(
-    //         session,
-    //         "SELECT name FROM cs_testdb.t_gb GROUP BY name HAVING SUM(val) > 5 ORDER BY name;");
-    //     REQUIRE(cur->is_success());
-    //     REQUIRE(cur->size() == 2);
-    // }
+    // GROUP BY name HAVING SUM(val) > 10 → 'b' (sum=20) and 'c' (sum=100); 'a' (sum=6) excluded.
+    // NB: otterbrix HAVING requires the aggregate to also appear in SELECT-list
+    // (resolve_having_operand walks group->expressions looking for matching agg).
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session,
+                                           "SELECT name, SUM(val) AS s FROM cs_testdb.t_gb "
+                                           "GROUP BY name HAVING SUM(val) > 10 ORDER BY name;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 2);
+    }
 }
 
 TEST_CASE("integration::cpp::test_computed_schema::table_qualified_no_alias") {

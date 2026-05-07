@@ -7,13 +7,19 @@
 #include <components/logical_plan/node_create_sequence.hpp>
 #include <components/logical_plan/node_create_type.hpp>
 #include <components/logical_plan/node_create_view.hpp>
+#include <components/logical_plan/node_aggregate.hpp>
 #include <components/logical_plan/node_data.hpp>
+#include <components/logical_plan/node_delete.hpp>
 #include <components/logical_plan/node_insert.hpp>
+#include <components/logical_plan/node_match.hpp>
+#include <components/logical_plan/node_select.hpp>
 #include <components/table/column_definition.hpp>
 #include <components/logical_plan/node_drop_database.hpp>
 #include <components/logical_plan/node_drop_macro.hpp>
 #include <components/logical_plan/node_drop_sequence.hpp>
 #include <components/logical_plan/node_drop_view.hpp>
+#include <components/expressions/scalar_expression.hpp>
+#include <components/expressions/compare_expression.hpp>
 
 #include <chrono>
 #include <core/executor.hpp>
@@ -652,6 +658,166 @@ namespace services::dispatcher {
                         auto new_insert = make_node_insert(resource(), main_full, std::move(main_chunk));
                         logic_plan = new_insert;
                     }
+                }
+                exec_result = co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
+                break;
+            }
+            case node_type::delete_t: {
+                if (catalog_.table_computes(id)) {
+                    // Computing-schema DELETE strategy:
+                    //   1. SELECT row_id FROM <expanded virtual t> WHERE <user predicate>
+                    //   2. For each affected row_id: DELETE from main + each side using
+                    //      a `row_id IN (...)` compound match.
+                    // Non-atomic (each phase is its own transaction). After step (2) on
+                    // main, SELECT * already won't see the row (LEFT JOIN drops side rows
+                    // whose row_id is missing in main); subsequent side-deletes are GC.
+                    auto del_node = boost::static_pointer_cast<node_delete_t>(logic_plan);
+                    auto main_full = del_node->collection_full_name();
+
+                    // Find original WHERE expression from match child.
+                    components::expressions::expression_ptr where_expr;
+                    for (auto& child : del_node->children()) {
+                        if (child->type() == node_type::match_t && !child->expressions().empty()) {
+                            where_expr = child->expressions()[0];
+                            break;
+                        }
+                    }
+
+                    // Detect "DELETE without WHERE" (transformer maps to all_true match).
+                    bool delete_all = false;
+                    if (where_expr &&
+                        where_expr->group() == components::expressions::expression_group::compare) {
+                        auto* cmp =
+                            static_cast<components::expressions::compare_expression_t*>(where_expr.get());
+                        if (cmp->type() == components::expressions::compare_type::all_true) {
+                            delete_all = true;
+                        }
+                    }
+
+                    // === Step 1: build & validate SELECT row_id FROM t [WHERE expr] ===
+                    auto sel_plan = components::planner::build_select_row_ids(
+                        resource(),
+                        catalog_,
+                        main_full,
+                        delete_all ? components::expressions::expression_ptr{} : where_expr);
+                    {
+                        auto verror = validate_types(resource(), catalog_, sel_plan.get());
+                        if (verror.contains_error()) {
+                            exec_result = {make_cursor(resource(), std::move(verror)), {}};
+                            break;
+                        }
+                        auto schema_res =
+                            validate_schema(resource(), catalog_, sel_plan.get(), params->parameters());
+                        if (schema_res.has_error()) {
+                            exec_result = {make_cursor(resource(), schema_res.error()), {}};
+                            break;
+                        }
+                    }
+                    components::planner::fixup_computing_paths(sel_plan);
+                    // Skipping post_validate_optimize (column_pruning) — it may incorrectly
+                    // prune columns from our hand-built JOIN chain.
+
+                    // === Step 2: execute SELECT, collect row_ids ===
+                    components::logical_plan::storage_parameters sel_params(resource());
+                    for (const auto& [pid, val] : params->parameters().parameters) {
+                        sel_params.parameters.emplace(pid, val);
+                    }
+                    auto sel_result = co_await execute_plan_impl(session,
+                                                                  sel_plan,
+                                                                  std::move(sel_params),
+                                                                  txn_data);
+                    if (!sel_result.cursor || sel_result.cursor->is_error()) {
+                        exec_result = std::move(sel_result);
+                        break;
+                    }
+
+                    std::vector<int64_t> row_ids_to_delete;
+                    if (sel_result.cursor) {
+                        auto n = sel_result.cursor->size();
+                        row_ids_to_delete.reserve(n);
+                        for (std::size_t r = 0; r < n; ++r) {
+                            row_ids_to_delete.push_back(
+                                sel_result.cursor->value(0, static_cast<uint64_t>(r)).value<int64_t>());
+                        }
+                    }
+
+                    // No matches → nothing to delete (success no-op).
+                    if (row_ids_to_delete.empty()) {
+                        update_result_.clear();
+                        exec_result = {make_cursor(resource(), core::error_t::no_error()), {}};
+                        break;
+                    }
+
+                    // === Step 3: DELETE FROM main + each side ===
+                    // For simplicity (and because compound OR with parameters has edge cases
+                    // I'd rather avoid for MVP), issue ONE delete per (target, row_id) pair.
+                    // O(N * (1 + sides)) DELETE statements — slow on big batches but correct.
+                    std::vector<collection_full_name_t> targets;
+                    targets.push_back(main_full);
+                    {
+                        const auto& cs = catalog_.get_computing_table_schema(id);
+                        auto sch = cs.latest_types_struct();
+                        for (const auto& f : sch.child_types()) {
+                            std::string side_name = computed_schema::side_table_name(
+                                std::string{main_full.collection}, f.alias(), f);
+                            targets.emplace_back(main_full.database, side_name);
+                        }
+                    }
+
+                    // row_id key with path explicitly set: row_id is column 0 in both
+                    // main (only column) and every side (first column of (row_id, value)).
+                    // Validator for DELETE on computing main returns latest_types_struct
+                    // (without row_id), so we pre-resolve the path here and skip validation.
+                    auto make_row_id_key = [&]() {
+                        components::expressions::key_t k(resource(), "row_id");
+                        std::pmr::vector<size_t> p(resource());
+                        p.push_back(0);
+                        k.set_path(std::move(p));
+                        return k;
+                    };
+
+                    bool any_error = false;
+                    for (int64_t rid : row_ids_to_delete) {
+                        // One parameter_node per row: contains a single param holding rid.
+                        auto pn = make_parameter_node(resource());
+                        auto pid = pn->add_parameter(
+                            components::types::logical_value_t(resource(), rid));
+                        for (const auto& target : targets) {
+                            auto cmp = make_compare_expression(
+                                resource(),
+                                components::expressions::compare_type::eq,
+                                components::expressions::param_storage{make_row_id_key()},
+                                components::expressions::param_storage{pid});
+                            auto m = make_node_match(resource(), target, cmp);
+                            node_ptr del = make_node_delete_many(resource(), target, m);
+                            components::logical_plan::storage_parameters sub_params(resource());
+                            for (const auto& [p2, val] : pn->parameters().parameters) {
+                                sub_params.parameters.emplace(p2, val);
+                            }
+                            auto sub_res = co_await execute_plan_impl(session,
+                                                                       del,
+                                                                       std::move(sub_params),
+                                                                       txn_data);
+                            if (!sub_res.cursor || sub_res.cursor->is_error()) {
+                                trace(log_,
+                                      "computing DELETE: failed for {}.{} row_id={}",
+                                      target.database,
+                                      target.collection,
+                                      rid);
+                                any_error = true;
+                            }
+                        }
+                    }
+
+                    update_result_.clear();
+                    exec_result = {make_cursor(resource(),
+                                               any_error
+                                                   ? core::error_t(core::error_code_t::other_error,
+                                                                   std::pmr::string{"computing DELETE: partial failure",
+                                                                                    resource()})
+                                                   : core::error_t::no_error()),
+                                   {}};
+                    break;
                 }
                 exec_result = co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
                 break;

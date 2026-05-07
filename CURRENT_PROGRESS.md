@@ -77,26 +77,38 @@ CMakeLists.txt                                       — -Wno-mismatched-new-del
 | `evolving_schema` | Несколько INSERT с разными столбцами; WHERE на dynamic-поле | ✅ |
 | `order_by` | `ORDER BY field ASC/DESC` | ✅ |
 | `compound_where` | `WHERE a > X AND a < Y`, `WHERE a=X OR b=Y` | ✅ |
-| `group_by` | `SELECT field, SUM(x) FROM t GROUP BY field` | ✅ |
+| `group_by` | `GROUP BY field`, plus `HAVING SUM(val) > X` (агрегат должен быть в SELECT-list — общее ограничение otterbrix) | ✅ |
 | `table_qualified_no_alias` | `SELECT t.a FROM t` (qualified без AS) | ✅ |
 | `table_alias` | `SELECT x.a FROM t AS x WHERE x.a=Y` | ✅ |
 | `limit_offset` | `LIMIT 3` после ORDER BY | ✅ |
-| `delete_rows` | `DELETE FROM t WHERE id <= 2` | ❌ TODO |
+| `delete_rows` | `DELETE FROM t WHERE id <= 2` | ✅ |
 | `multi_type_field` | Поле с двумя типами одновременно (`val::BIGINT` и `val::STRING`) | ❌ TODO |
 
 ## Что предстоит сделать
 
-### 1. DELETE / UPDATE на computing tables
+### 1. ~~DELETE на computing tables~~ ✅ работает
 
-Сейчас `intercept_dml_io_` (`services/collection/executor.cpp:541-747`) обрабатывает один DML-оператор и пишет в одну collection — target из `node_delete_t::collection_full_name` или `node_update_t::collection_full_name`. Для computing-таблицы это main, а main physically = `[row_id]` без user-полей.
+Реализовано в `dispatcher.cpp` — case `node_type::delete_t` для computing.
+Алгоритм:
+1. `build_select_row_ids` (новый helper в `expand_computing.cpp`) строит JOIN-цепочку
+   с явной `[main.row_id]`-проекцией (без subquery wrapper, чтобы row_id выходил наружу).
+2. Validate + fixup_paths + execute_plan_impl на этом select → cursor с row_ids.
+3. Для каждого row_id и для каждой target (main + sides): build node_delete с
+   match `row_id == $param`, path для row_id pre-resolved на column 0 (validator
+   на DELETE computing main отдал бы `latest_types_struct` без row_id и упал бы),
+   execute_plan_impl. O(N * (1 + sides)) DELETE-statements.
 
-**Что нужно:**
-- DELETE `WHERE field = X`: filter относится к dynamic-полю, которое лежит в side. Нужно либо
-  - (а) Сначала найти `row_id`-ы satisfying filter (через scan side), затем удалить main row + соответствующие side rows;
-  - (б) Применять plan-rewrite: `DELETE FROM t WHERE expr` → `DELETE WHERE row_id IN (SELECT row_id FROM <expanded virtual t>)`. Это требует поддержки `IN (subquery)` в DELETE, что отдельный SQL-feature.
-- UPDATE `SET field = X`: на side это либо INSERT (если row_id отсутствует в этой side — новое значение), либо UPDATE существующей строки в side. Нужна логика «upsert по row_id».
+Не оптимально по перфомансу для больших batch-ей. Можно ускорить через compound
+`OR row_id == r1 OR row_id == r2 ...` или специальный `IN (...)`-операнд, но это
+не блокер для MVP.
 
-**Объём:** Существенный. Нужно либо новая ветка в `intercept_dml_io_` для computing, либо новый flow на уровне dispatcher (как INSERT split).
+### UPDATE на computing tables — TODO
+
+UPDATE `SET field = X` на side нуждается в "upsert по row_id" — INSERT если row_id
+отсутствует в этой side (новое значение для бывшего NULL), UPDATE если есть.
+Существующий `intercept_dml_io_` в executor не умеет multi-table.
+Подход аналогичный DELETE: SELECT row_id WHERE expr → для каждого row_id выполнить
+upsert на side. Объём средний.
 
 ### 2. multi-type field (`val::BIGINT` и `val::STRING` одновременно)
 
@@ -123,15 +135,15 @@ CMakeLists.txt                                       — -Wno-mismatched-new-del
 
 **Объём:** средний-большой. Нужно детально проследить как JOIN-валидатор/optimizer/operator резолвят references.
 
-### 4. HAVING с aggregate function
+### 4. ~~HAVING с aggregate function~~ ✅ работает
 
-Закомментирован в `group_by` тесте. Проблема: SQL parser сворачивает `HAVING SUM(val) > 5` в hidden aggregate внутри `node_select_t::internal_aggregate_count`. После моего expand эти hidden expressions имеют paths резолвящиеся против JOIN-схемы, и path-fixup их не трогает (они «спрятаны» в специальный slot).
+При условии что aggregate появляется в SELECT-list (общее ограничение otterbrix —
+`resolve_having_operand` ищет соответствующий aggregate в `group->expressions()`,
+если не нашёл — возвращает literal-key с именем функции, что потом фейлит validator).
+Это не моё ограничение, существует и для regular tables. Тест `group_by` покрывает.
 
-**Что нужно:**
-- Расширить `fixup_recursive` чтобы он также обходил скрытые aggregate-выражения в `node_select_t` (по индексу `expressions.size() - internal_aggregate_count` до конца).
-- Или явно строить отдельный `node_having_t` в transformer и обрабатывать его в expand.
-
-**Объём:** небольшой (если расширить только fixup). Также надо проверить через тест что `HAVING` validator не падает раньше fixup-а.
+Если когда-нибудь захотят поддержать HAVING без дублирования агрегата в SELECT —
+работа в transformer / `resolve_having_operand`, не в моём rewrite.
 
 ### 5. Атомарность INSERT (main + sides)
 
@@ -174,9 +186,8 @@ CMakeLists.txt                                       — -Wno-mismatched-new-del
 ## Как продолжить
 
 Рекомендуемый порядок:
-1. **DELETE/UPDATE** — самое важное для usability. Возможно с этим раскроется multi-table atomicity (#5).
+1. **UPDATE на computing** — DELETE сделан, UPDATE по аналогии (upsert по row_id для каждой side).
 2. **Регрессии в существующих тестах (#6)** — диагностика под gdb.
 3. **JOIN computing с regular (#3)** — следующий по полезности.
-4. **HAVING aggregate (#4)** — мелочь.
-5. **multi-type field (#2)** — корнер-кейс.
-6. **Performance pushdown (#7)** — оптимизация после функциональной полноты.
+4. **multi-type field (#2)** — корнер-кейс.
+5. **Performance pushdown (#7)** — оптимизация после функциональной полноты.
