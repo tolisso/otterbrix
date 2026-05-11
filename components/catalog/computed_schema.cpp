@@ -63,6 +63,20 @@ namespace components::catalog {
         return types::complex_logical_type::create_struct("latest_types", std::move(retval));
     }
 
+    std::string computed_schema::side_table_name(std::string_view main_table,
+                                                  std::string_view field,
+                                                  const types::complex_logical_type& type) {
+        std::string result;
+        result.reserve(8 + main_table.size() + field.size() + 6);
+        result.append("_dyn_");
+        result.append(main_table);
+        result.append("__");
+        result.append(field);
+        result.append("__");
+        result.append(std::to_string(static_cast<int>(type.type())));
+        return result;
+    }
+
     bool computed_schema::has_type(const std::pmr::string& field_name,
                                     const types::complex_logical_type& type) const {
         auto it = fields_.find(field_name);

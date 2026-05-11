@@ -21,6 +21,7 @@
 #include <thread>
 
 #include <components/physical_plan_generator/create_plan.hpp>
+#include <components/planner/annotate_computing.hpp>
 #include <components/planner/optimizer.hpp>
 #include <components/planner/planner.hpp>
 
@@ -322,6 +323,13 @@ namespace services::dispatcher {
             case node_type::drop_macro_t:
                 break;
             default: {
+                // Computing-schema annotation: for each aggregate(t) where t is a
+                // computing table, stamp side-table metadata on the aggregate node
+                // so create_plan_aggregate emits scan_computing_table. INSERT into
+                // computing tables is handled separately (case insert_t above).
+                if (logic_plan->type() != node_type::insert_t) {
+                    components::planner::annotate_computing_aggregates(resource(), logic_plan, catalog_);
+                }
                 error = validate_types(resource(), catalog_, logic_plan.get());
                 if (!error.contains_error()) {
                     auto schema_res = validate_schema(resource(), catalog_, logic_plan.get(), params->parameters());
@@ -444,12 +452,13 @@ namespace services::dispatcher {
                 break;
             }
             case node_type::insert_t: {
-                if (catalog_.table_computes(id)) {
-                    // Dynamic schema: expand schema and rename column aliases to physical names
+                if (catalog_.table_computes(id) && !catalog_.get_computing_table_schema(id).is_sparse()) {
+                    // Legacy dynamic-single-table INSERT: each new (field, type) is
+                    // appended to the main table via storage_add_column. The INSERT
+                    // itself then runs as a regular INSERT against the augmented main.
                     auto& children = logic_plan->children();
                     if (!children.empty() && children.front()->type() == node_type::data_t) {
-                        auto data_node =
-                            boost::static_pointer_cast<node_data_t>(children.front());
+                        auto data_node = boost::static_pointer_cast<node_data_t>(children.front());
                         auto& chunk = data_node->data_chunk();
                         auto& schema = catalog_.get_computing_table_schema(id);
                         uint64_t row_count = chunk.size();
@@ -458,7 +467,6 @@ namespace services::dispatcher {
                         for (auto& col : chunk.data) {
                             auto field_name = col.type().alias();
                             auto field_type = col.type();
-
                             std::pmr::string pmr_field(field_name.c_str(), resource());
                             if (!schema.has_type(pmr_field, field_type)) {
                                 components::table::column_definition_t col_def(
@@ -473,18 +481,181 @@ namespace services::dispatcher {
                                                                    col_def);
                                 co_await std::move(acf);
                             }
-
-                            // Append to schema in INSERT column order so that column_order_ matches
-                            // physical storage column order. append() deduplicates, so repeated calls
-                            // for the same (field, type) are no-ops that preserve the original ordering.
                             schema.append(pmr_field, field_type);
-
                             col.set_type_alias(std::string(field_name));
-
-                            // Track for computed_schema refcount update after successful INSERT
                             update_result_[{std::pmr::string(field_name.c_str(), resource()), field_type}] +=
                                 row_count;
                         }
+                    }
+                } else if (catalog_.table_computes(id)) {
+                    // Sparse computing-schema INSERT:
+                    //   main table physically holds only `row_id BIGINT`.
+                    //   Each user (field, type) pair lives in a side table
+                    //     `_dyn_<main>__<field>__<type_id>` with shape `(row_id, value)`.
+                    //   For a row that has no value for a given field we simply do not
+                    //   insert into that side — LEFT-merge at SELECT time yields NULL.
+                    //
+                    // NOTE: non-atomic. Main + each side INSERT is its own transaction.
+                    auto& children = logic_plan->children();
+                    if (!children.empty() && children.front()->type() == node_type::data_t) {
+                        auto data_node = boost::static_pointer_cast<node_data_t>(children.front());
+                        auto& user_chunk = data_node->data_chunk();
+                        auto& schema = catalog_.get_computing_table_schema(id);
+                        uint64_t row_count = user_chunk.size();
+                        auto main_full = logic_plan->collection_full_name();
+                        update_result_.clear();
+
+                        // Step 1: ensure side collections exist + extend computed_schema.
+                        std::pmr::vector<collection_full_name_t> side_names(resource());
+                        side_names.reserve(user_chunk.data.size());
+                        for (auto& col : user_chunk.data) {
+                            auto field_name = col.type().alias();
+                            auto field_type = col.type();
+                            std::pmr::string pmr_field(field_name.c_str(), resource());
+
+                            std::string side_name_str = computed_schema::side_table_name(
+                                std::string_view(main_full.collection.data(), main_full.collection.size()),
+                                field_name,
+                                field_type);
+                            collection_full_name_t side_full(main_full.database, side_name_str);
+                            side_names.push_back(side_full);
+
+                            if (collections_.count(side_full) == 0) {
+                                // Side `value` column carries `alias = field_name` so that
+                                // subsequent SELECT-side scan can reference it directly.
+                                std::vector<components::table::column_definition_t> side_cols;
+                                complex_logical_type rid_def(logical_type::BIGINT);
+                                rid_def.set_alias("row_id");
+                                side_cols.emplace_back("row_id", rid_def, /*not_null=*/true, std::nullopt);
+                                complex_logical_type val_def = field_type;
+                                val_def.set_alias(std::string(field_name));
+                                side_cols.emplace_back("value", val_def, /*not_null=*/true, std::nullopt);
+
+                                {
+                                    auto [_ac, acf] = actor_zeta::send(disk_address_,
+                                                                       &disk::manager_disk_t::append_collection,
+                                                                       session,
+                                                                       side_full.database,
+                                                                       side_full.collection);
+                                    co_await std::move(acf);
+                                }
+                                {
+                                    auto [_cs2, csf2] = actor_zeta::send(
+                                        disk_address_,
+                                        &disk::manager_disk_t::create_storage_with_columns,
+                                        session,
+                                        side_full,
+                                        side_cols);
+                                    co_await std::move(csf2);
+                                }
+                                if (index_address_ != actor_zeta::address_t::empty_address()) {
+                                    auto [_ri, rif] = actor_zeta::send(index_address_,
+                                                                       &index::manager_index_t::register_collection,
+                                                                       session,
+                                                                       side_full);
+                                    co_await std::move(rif);
+                                }
+                                {
+                                    auto [_fc, fcf] = actor_zeta::send(disk_address_,
+                                                                       &disk::manager_disk_t::flush,
+                                                                       session,
+                                                                       wal::id_t{0});
+                                    co_await std::move(fcf);
+                                }
+                                {
+                                    std::vector<components::table::column_definition_t> sch_cols = side_cols;
+                                    std::vector<field_description> descs;
+                                    descs.reserve(sch_cols.size());
+                                    for (size_t i = 0; i < sch_cols.size(); ++i) {
+                                        descs.emplace_back(static_cast<field_id_t>(i));
+                                    }
+                                    table_id sid(resource(), side_full);
+                                    auto sch = components::catalog::schema(
+                                        resource(), std::move(sch_cols), std::move(descs));
+                                    auto err = catalog_.create_table(sid,
+                                                                     table_metadata(resource(), std::move(sch)));
+                                    (void)err;
+                                }
+                                collections_.insert(side_full);
+                            }
+
+                            schema.append(pmr_field, field_type);
+                            col.set_type_alias(std::string(field_name));
+                            update_result_[{std::pmr::string(field_name.c_str(), resource()), field_type}] +=
+                                row_count;
+                        }
+
+                        // Step 2: allocate contiguous row_ids from main's current row count.
+                        uint64_t next_row_id = 0;
+                        {
+                            auto [_tr, trf] = actor_zeta::send(disk_address_,
+                                                               &disk::manager_disk_t::storage_total_rows,
+                                                               session,
+                                                               main_full);
+                            next_row_id = co_await std::move(trf);
+                        }
+
+                        // Step 3: per side, build (row_id, value) chunk over non-null rows
+                        //         and execute its own INSERT.
+                        for (size_t col_idx = 0; col_idx < user_chunk.data.size(); ++col_idx) {
+                            auto& src_col = user_chunk.data[col_idx];
+                            auto field_type = src_col.type();
+                            const auto& side_full = side_names[col_idx];
+
+                            uint64_t non_null = 0;
+                            for (uint64_t r = 0; r < row_count; ++r) {
+                                if (!src_col.is_null(r)) ++non_null;
+                            }
+                            if (non_null == 0) continue;
+
+                            std::pmr::vector<complex_logical_type> side_types(resource());
+                            complex_logical_type rid_t(logical_type::BIGINT);
+                            rid_t.set_alias("row_id");
+                            side_types.emplace_back(rid_t);
+                            complex_logical_type val_t = field_type;
+                            val_t.set_alias("value");
+                            side_types.emplace_back(val_t);
+
+                            components::vector::data_chunk_t side_chunk(resource(), side_types, non_null);
+                            side_chunk.set_cardinality(non_null);
+                            uint64_t out_idx = 0;
+                            for (uint64_t r = 0; r < row_count; ++r) {
+                                if (src_col.is_null(r)) continue;
+                                side_chunk.set_value(0,
+                                                     out_idx,
+                                                     logical_value_t(resource(),
+                                                                     static_cast<int64_t>(next_row_id + r)));
+                                side_chunk.set_value(1, out_idx, src_col.value(r));
+                                ++out_idx;
+                            }
+
+                            auto side_plan = make_node_insert(resource(), side_full, std::move(side_chunk));
+                            components::table::transaction_data sub_txn{0, 0};
+                            components::logical_plan::storage_parameters sub_params(resource());
+                            auto sub_fut = execute_plan_impl(session, side_plan, std::move(sub_params), sub_txn);
+                            auto sub_res = co_await std::move(sub_fut);
+                            if (!sub_res.cursor || sub_res.cursor->is_error()) {
+                                trace(log_,
+                                      "computing INSERT: side {}.{} failed",
+                                      side_full.database,
+                                      side_full.collection);
+                            }
+                        }
+
+                        // Step 4: replace data_node with a main chunk of just row_ids.
+                        std::pmr::vector<complex_logical_type> main_types(resource());
+                        complex_logical_type rid_main(logical_type::BIGINT);
+                        rid_main.set_alias("row_id");
+                        main_types.emplace_back(rid_main);
+                        components::vector::data_chunk_t main_chunk(resource(), main_types, row_count);
+                        main_chunk.set_cardinality(row_count);
+                        for (uint64_t r = 0; r < row_count; ++r) {
+                            main_chunk.set_value(0,
+                                                 r,
+                                                 logical_value_t(resource(),
+                                                                 static_cast<int64_t>(next_row_id + r)));
+                        }
+                        data_node->data_chunk() = std::move(main_chunk);
                     }
                 }
                 exec_result = co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
@@ -566,11 +737,32 @@ namespace services::dispatcher {
                     auto create_collection = boost::static_pointer_cast<node_create_collection_t>(logic_plan);
                     // Create storage in manager_disk_t
                     if (create_collection->column_definitions().empty()) {
-                        auto [_cs, csf] = actor_zeta::send(disk_address_,
-                                                           &disk::manager_disk_t::create_storage,
-                                                           session,
-                                                           logic_plan->collection_full_name());
-                        co_await std::move(csf);
+                        if (create_collection->is_dynamic_schema_table()) {
+                            // SQL `CREATE TABLE t()` → sparse computing table. Main
+                            // physical storage holds only `row_id BIGINT NOT NULL`;
+                            // user fields live in per-(field,type) side tables
+                            // created lazily at INSERT.
+                            std::vector<components::table::column_definition_t> main_cols;
+                            complex_logical_type rid_t(logical_type::BIGINT);
+                            rid_t.set_alias("row_id");
+                            main_cols.emplace_back("row_id", rid_t, /*not_null=*/true, std::nullopt);
+                            auto [_cs, csf] = actor_zeta::send(disk_address_,
+                                                               &disk::manager_disk_t::create_storage_with_columns,
+                                                               session,
+                                                               logic_plan->collection_full_name(),
+                                                               std::move(main_cols));
+                            co_await std::move(csf);
+                        } else {
+                            // Legacy schemaless collection (wrapper API). Storage is
+                            // a no-column table that grows via storage_add_column on
+                            // each new field at INSERT time — the pre-sparse-layout
+                            // behaviour, kept for backwards compatibility.
+                            auto [_cs, csf] = actor_zeta::send(disk_address_,
+                                                               &disk::manager_disk_t::create_storage,
+                                                               session,
+                                                               logic_plan->collection_full_name());
+                            co_await std::move(csf);
+                        }
                     } else {
                         std::vector<components::table::column_definition_t> storage_columns =
                             create_collection->column_definitions();
@@ -1019,6 +1211,11 @@ namespace services::dispatcher {
                 if (node_info->column_definitions().empty()) {
                     auto err = catalog_.create_computing_table(id);
                     assert(!err.contains_error());
+                    // Distinguish SQL `CREATE TABLE t()` (sparse side-table layout)
+                    // from wrapper-API empty create (legacy dynamic single table).
+                    if (node_info->is_dynamic_schema_table()) {
+                        catalog_.get_computing_table_schema(id).set_sparse(true);
+                    }
                 } else {
                     auto types = node_info->schema();
                     std::vector<field_description> desc;

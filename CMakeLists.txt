@@ -15,6 +15,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Coroutines support for GCC (Clang enables coroutines by default in C++20)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_compile_options(-fcoroutines)
+    # GCC complains about per-promise operator new/delete mismatch in
+    # actor_zeta::unique_future coroutine plumbing; suppress until upstream fixes it.
+    add_compile_options(-Wno-mismatched-new-delete)
 endif()
 
 message (STATUS "CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")

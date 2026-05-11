@@ -31,7 +31,12 @@ namespace components::sql::transform {
         }
 
         if (col_defs.value().empty()) {
-            return logical_plan::make_node_create_collection(resource_, rangevar_to_collection(node.relation));
+            // `CREATE TABLE t()` opts into the sparse (per-field side-table)
+            // computing-schema storage. Mark the node so the dispatcher routes
+            // it through the new INSERT split + scan_computing_table at SELECT.
+            auto plan = logical_plan::make_node_create_collection(resource_, rangevar_to_collection(node.relation));
+            plan->set_dynamic_schema_table(true);
+            return plan;
         }
 
         auto constraints = extract_table_constraints(*coldefs);

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <components/types/types.hpp>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -25,6 +27,20 @@ namespace components::catalog {
         [[nodiscard]] bool has_type(const std::pmr::string& field_name,
                                     const types::complex_logical_type& type) const;
 
+        // True for the sparse-storage layout: each (field, type) lives in its own
+        // side table `_dyn_<main>__<field>__<typeid>`, main holds only `row_id`.
+        // False for legacy dynamic-single-table layout (storage_add_column on main).
+        [[nodiscard]] bool is_sparse() const { return is_sparse_; }
+        void set_sparse(bool v) { is_sparse_ = v; }
+
+        // Canonical side-table name for one (field, type) pair of a computing table.
+        // Pattern: "_dyn_<main_table>__<field>__<type_id>" — keeps multi-type fields
+        // disambiguated by logical_type id, and the prefix `_dyn_` is reserved for
+        // side tables.
+        [[nodiscard]] static std::string side_table_name(std::string_view main_table,
+                                                         std::string_view field,
+                                                         const types::complex_logical_type& type);
+
     private:
         // field_name -> list of types currently present
         std::pmr::unordered_map<std::pmr::string,
@@ -33,5 +49,7 @@ namespace components::catalog {
 
         // Preserves insertion order of (field_name, type) pairs for physical column ordering.
         std::pmr::vector<std::pair<std::pmr::string, types::complex_logical_type>> column_order_;
+
+        bool is_sparse_{false};
     };
 } // namespace components::catalog

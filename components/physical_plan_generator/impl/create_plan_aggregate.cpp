@@ -7,7 +7,9 @@
 #include <components/logical_plan/node_group.hpp>
 #include <components/logical_plan/node_limit.hpp>
 #include <components/physical_plan/operators/operator_distinct.hpp>
+#include <components/physical_plan/operators/operator_match.hpp>
 #include <components/physical_plan/operators/operator_sort.hpp>
+#include <components/physical_plan/operators/scan/scan_computing_table.hpp>
 #include <components/physical_plan/operators/scan/transfer_scan.hpp>
 #include <components/physical_plan_generator/create_plan.hpp>
 
@@ -55,14 +57,22 @@ namespace services::planner::impl {
         components::operators::operator_ptr sort_op;
         components::operators::operator_ptr select_op;
         components::operators::operator_ptr child_op;
+        // For computing tables we can't push filters into a full_scan on the main
+        // table — main is physically `[row_id]` and side tables are `[row_id, value]`,
+        // so user-field filters must run as a post-filter over scan_computing_table.
+        components::logical_plan::node_ptr computing_match_node;
 
         for (const components::logical_plan::node_ptr& child : node->children()) {
             switch (child->type()) {
                 case node_type::limit_t:
                     break; // already handled above
                 case node_type::match_t:
-                    // Call create_plan_match directly so we can pass projected_cols
-                    match_op = create_plan_match(context, child, scan_limit, projected_cols);
+                    if (agg_node->is_computing()) {
+                        computing_match_node = child;
+                    } else {
+                        // Call create_plan_match directly so we can pass projected_cols
+                        match_op = create_plan_match(context, child, scan_limit, projected_cols);
+                    }
                     break;
                 case node_type::group_t:
                     group_op = create_plan(context, function_registry, child, limit, params);
@@ -86,6 +96,40 @@ namespace services::planner::impl {
             if (match_op) {
                 match_op->set_children(std::move(executor));
                 executor = std::move(match_op);
+            }
+        } else if (agg_node->is_computing()) {
+            // Sparse computing-table source: scan_computing_table parallel-scans
+            // main + needed sides and hash-gathers values into the virtual schema.
+            const auto& sides = agg_node->computing_sides();
+            std::pmr::vector<components::types::complex_logical_type> virtual_types(plan_resource);
+            std::pmr::vector<collection_full_name_t> side_names(plan_resource);
+            virtual_types.reserve(sides.size());
+            side_names.reserve(sides.size());
+            for (const auto& s : sides) {
+                virtual_types.push_back(s.field_type);
+                side_names.push_back(s.collection);
+            }
+            // If a post-match exists we need every matching row before limiting, so
+            // disable scan-side limit and let the match operator stop early.
+            auto effective_scan_limit = computing_match_node
+                                            ? components::logical_plan::limit_t::unlimit()
+                                            : scan_limit;
+            auto scan = boost::intrusive_ptr(new components::operators::scan_computing_table(
+                plan_resource,
+                coll_name,
+                std::move(virtual_types),
+                std::move(side_names),
+                projected_cols,
+                effective_scan_limit));
+            executor = std::move(scan);
+            if (computing_match_node && !computing_match_node->expressions().empty()) {
+                auto post_match =
+                    boost::intrusive_ptr(new components::operators::operator_match_t(plan_resource,
+                                                                                     log_t{},
+                                                                                     computing_match_node->expressions()[0],
+                                                                                     scan_limit));
+                post_match->set_children(std::move(executor));
+                executor = std::move(post_match);
             }
         } else {
             executor = match_op ? std::move(match_op)
