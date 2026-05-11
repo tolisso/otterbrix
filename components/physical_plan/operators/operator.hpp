@@ -24,6 +24,7 @@ namespace components::operators {
         transfer_scan,
         index_scan,
         primary_key_scan,
+        scan_computing_table,
         insert,
         remove,
         update,
@@ -37,7 +38,7 @@ namespace components::operators {
 
     inline bool is_scan(operator_type t) {
         return t == operator_type::full_scan || t == operator_type::transfer_scan || t == operator_type::index_scan ||
-               t == operator_type::primary_key_scan;
+               t == operator_type::primary_key_scan || t == operator_type::scan_computing_table;
     }
 
     enum class operator_state

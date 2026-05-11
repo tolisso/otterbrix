@@ -329,18 +329,14 @@ namespace services::dispatcher {
             case node_type::drop_macro_t:
                 break;
             default: {
-                // Computing-schema expansion: replace `aggregate(t)` for any computing
-                // table `t` with a subquery that LEFT JOINs side tables. Done before
-                // validate so the validator sees the expanded plan with proper schema.
-                // INSERT into computing tables is handled separately (case insert_t below)
-                // and is not subject to this rewrite.
+                // Computing-schema: instead of restructuring the logical plan, stamp
+                // side-table metadata onto each aggregate(t) where t is a computing
+                // table. The validator continues to see the virtual schema (via
+                // get_computing_table_schema(...).latest_types_struct()), so all the
+                // match/select/sort/group plumbing works unchanged. create_plan_aggregate
+                // reads the stamped metadata and emits scan_computing_table.
                 if (logic_plan->type() != node_type::insert_t) {
-                    core::error_t expand_err = core::error_t::no_error();
-                    logic_plan = components::planner::expand_computing_tables(
-                        resource(), logic_plan, catalog_, &expand_err);
-                    if (expand_err.contains_error()) {
-                        co_return make_cursor(resource(), std::move(expand_err));
-                    }
+                    components::planner::annotate_computing_aggregates(resource(), logic_plan, catalog_);
                 }
                 error = validate_types(resource(), catalog_, logic_plan.get());
                 if (!error.contains_error()) {
@@ -348,11 +344,6 @@ namespace services::dispatcher {
                     if (schema_res.has_error()) {
                         error = schema_res.error();
                     } else {
-                        // Rebase outer-level expression paths through computing-subquery
-                        // wrappers' projections. Validator resolves user-side keys against
-                        // the JOIN-internal schema; my_select_node prunes that to user-fields,
-                        // so the indices need translation before physical-plan generation.
-                        components::planner::fixup_computing_paths(logic_plan);
                         // Post-validate optimization pass: column pruning, etc.
                         // Runs here because it needs paths resolved by the schema validator.
                         logic_plan = components::planner::post_validate_optimize(resource(), logic_plan, &catalog_);
