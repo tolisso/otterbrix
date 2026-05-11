@@ -119,6 +119,14 @@ namespace components::operators {
                     if (!col_needed[i]) continue;
                     chunk.data[i].validity().set_all_invalid(this_cap);
                 }
+                // Carry logical row_id through chunk.row_ids — the standard otterbrix
+                // side-channel for row-identifiers, propagated through match/sort/etc.
+                // (see operator_match.cpp:85, operator_delete.cpp:93). Downstream DELETE
+                // handler reads these to dispatch per-table sub-DELETEs.
+                auto* rid_out = chunk.row_ids.data<int64_t>();
+                for (uint64_t i = 0; i < this_cap; ++i) {
+                    rid_out[i] = row_ids[off + i];
+                }
                 out_chunks.emplace_back(std::move(chunk));
             }
         }

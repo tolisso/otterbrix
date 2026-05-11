@@ -160,6 +160,92 @@ TEST_CASE("integration::cpp::test_computed_schema::delete_rows") {
     }
 }
 
+TEST_CASE("integration::cpp::test_computed_schema::update_rows") {
+    auto config = test_create_config("/tmp/test_computed_schema/update");
+    test_clear_directory(config);
+    config.disk.on = false;
+    config.wal.on = false;
+    test_spaces space(config);
+    auto* dispatcher = space.dispatcher();
+
+    {
+        auto session = otterbrix::session_id_t();
+        dispatcher->execute_sql(session, "CREATE DATABASE cs_testdb;");
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "CREATE TABLE cs_testdb.t_upd ();");
+        REQUIRE(cur->is_success());
+    }
+
+    // INSERT 5 rows with id and name.
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session,
+            "INSERT INTO cs_testdb.t_upd (id, name) VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e');");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 5);
+    }
+
+    // UPDATE one field on a subset; unchanged fields must survive (re-alloc with full copy).
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur =
+            dispatcher->execute_sql(session, "UPDATE cs_testdb.t_upd SET name = 'X' WHERE id <= 2;");
+        REQUIRE(cur->is_success());
+    }
+
+    // Total row count unchanged (UPDATE doesn't add/remove rows from the virtual table).
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session, "SELECT * FROM cs_testdb.t_upd;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 5);
+        REQUIRE(cur->chunk_data().column_count() == 2);
+    }
+
+    // Updated rows must have new name AND their original id preserved.
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session, "SELECT id, name FROM cs_testdb.t_upd WHERE name = 'X' ORDER BY id;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 2);
+        REQUIRE(cur->chunk_data().value(0, 0).value<int64_t>() == 1);
+        REQUIRE(cur->chunk_data().value(0, 1).value<int64_t>() == 2);
+        REQUIRE(cur->chunk_data().value(1, 0).value<const std::string&>() == "X");
+        REQUIRE(cur->chunk_data().value(1, 1).value<const std::string&>() == "X");
+    }
+
+    // Untouched rows keep their original name.
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(
+            session, "SELECT id, name FROM cs_testdb.t_upd WHERE id >= 3 ORDER BY id;");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 3);
+        REQUIRE(cur->chunk_data().value(1, 0).value<const std::string&>() == "c");
+        REQUIRE(cur->chunk_data().value(1, 1).value<const std::string&>() == "d");
+        REQUIRE(cur->chunk_data().value(1, 2).value<const std::string&>() == "e");
+    }
+
+    // UPDATE matching nothing — should succeed with no changes.
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur =
+            dispatcher->execute_sql(session, "UPDATE cs_testdb.t_upd SET name = 'Z' WHERE id > 100;");
+        REQUIRE(cur->is_success());
+    }
+    {
+        auto session = otterbrix::session_id_t();
+        auto cur = dispatcher->execute_sql(session,
+                                           "SELECT name FROM cs_testdb.t_upd WHERE name = 'Z';");
+        REQUIRE(cur->is_success());
+        REQUIRE(cur->size() == 0);
+    }
+}
+
 TEST_CASE("integration::cpp::test_computed_schema::multi_type_field") {
     auto config = test_create_config("/tmp/test_computed_schema/multi_type");
     test_clear_directory(config);
