@@ -11,6 +11,7 @@
 #include <components/logical_plan/param_storage.hpp>
 #include <components/physical_plan/operators/operator_delete.hpp>
 #include <components/physical_plan/operators/operator_insert.hpp>
+#include <components/physical_plan/operators/operator_insert_computing.hpp>
 #include <components/physical_plan/operators/operator_update.hpp>
 #include <components/physical_plan_generator/create_plan.hpp>
 #include <core/executor.hpp>
@@ -204,6 +205,16 @@ namespace services::collection::executor {
 
         // Step 2: Execute physical plan
         auto result = co_await execute_sub_plan_(session, std::move(plan_data), txn_data);
+
+        if (is_dml && result.cursor->is_success() && result.is_computing_table) {
+            // Computing-table DML (insert_computing / delete_computing /
+            // update_computing) drove the full multi-collection lifecycle —
+            // storage_append/delete/update on N+1 tables, N+1 WAL physicals,
+            // txn_manager_->commit, N+1 storage_commit_*, and the WAL COMMIT
+            // marker — inline in intercept_dml_io_. Nothing left to do at the
+            // single-collection layer.
+            co_return execute_result_t{std::move(result.cursor), std::move(result.updates)};
+        }
 
         if (is_dml && result.cursor->is_success()) {
             // Step 3: WAL DATA (physical format — stores post-compute data for direct replay)
@@ -434,7 +445,10 @@ namespace services::collection::executor {
                 trace(log_, "executor: found waiting operator, type={}", static_cast<int>(waiting_op->type()));
                 if (waiting_op->type() == components::operators::operator_type::insert ||
                     waiting_op->type() == components::operators::operator_type::remove ||
-                    waiting_op->type() == components::operators::operator_type::update) {
+                    waiting_op->type() == components::operators::operator_type::update ||
+                    waiting_op->type() == components::operators::operator_type::insert_computing ||
+                    waiting_op->type() == components::operators::operator_type::remove_computing ||
+                    waiting_op->type() == components::operators::operator_type::update_computing) {
                     result_tracking = co_await intercept_dml_io_(waiting_op, &pipeline_context);
                 } else {
                     co_await waiting_op->await_async_and_resume(&pipeline_context);
@@ -544,6 +558,7 @@ namespace services::collection::executor {
         using namespace components::operators;
         using components::vector::data_chunk_t;
         using components::vector::vector_t;
+        namespace types = components::types;
 
         sub_plan_result_t result;
         result.wal_row_ids = std::pmr::vector<int64_t>(resource());
@@ -737,6 +752,202 @@ namespace services::collection::executor {
 
                 // output_ already set by on_execute_impl (contains updated rows)
                 waiting_op->mark_executed();
+                break;
+            }
+
+            case operator_type::insert_computing: {
+                // Sparse computing-schema INSERT — drives the full multi-collection
+                // DML lifecycle (storage_append + WAL physical + txn commit +
+                // storage_commit_append + WAL COMMIT marker) for main + every side
+                // under one transaction id. The post-DML loop in execute_plan sees
+                // result.is_computing_table = true and skips its own work.
+                auto* ins_c = static_cast<operator_insert_computing*>(waiting_op.get());
+                auto& user_chunk = waiting_op->output()->data_chunk();
+                const uint64_t row_count = user_chunk.size();
+                const auto& main_full = ins_c->main_collection();
+                const auto& sides = ins_c->sides();
+
+                // Allocate fresh logical row_id range from main's current row count.
+                uint64_t next_row_id = 0;
+                {
+                    auto [_tr, trf] = actor_zeta::send(disk_address_,
+                                                       &disk::manager_disk_t::storage_total_rows,
+                                                       ctx->session,
+                                                       main_full);
+                    next_row_id = co_await std::move(trf);
+                }
+
+                // write_entry_t = {collection, data}. Built per side (non-NULL rows)
+                // and one for main (all row_ids).
+                struct write_entry {
+                    collection_full_name_t collection;
+                    std::unique_ptr<data_chunk_t> data;
+                    int64_t row_start{0};
+                    uint64_t row_count{0};
+                };
+                std::vector<write_entry> writes;
+                writes.reserve(user_chunk.data.size() + 1);
+
+                for (size_t col_idx = 0; col_idx < user_chunk.data.size() && col_idx < sides.size();
+                     ++col_idx) {
+                    auto& src_col = user_chunk.data[col_idx];
+                    const auto& side = sides[col_idx];
+
+                    uint64_t non_null = 0;
+                    for (uint64_t r = 0; r < row_count; ++r) {
+                        if (!src_col.is_null(r)) ++non_null;
+                    }
+                    if (non_null == 0) continue;
+
+                    std::pmr::vector<types::complex_logical_type> side_types(resource());
+                    types::complex_logical_type rid_t(types::logical_type::BIGINT);
+                    rid_t.set_alias("row_id");
+                    side_types.emplace_back(rid_t);
+                    types::complex_logical_type val_t = side.field_type;
+                    val_t.set_alias("value");
+                    side_types.emplace_back(val_t);
+
+                    auto side_chunk =
+                        std::make_unique<data_chunk_t>(resource(), side_types, non_null);
+                    side_chunk->set_cardinality(non_null);
+                    uint64_t out_idx = 0;
+                    for (uint64_t r = 0; r < row_count; ++r) {
+                        if (src_col.is_null(r)) continue;
+                        side_chunk->set_value(
+                            0,
+                            out_idx,
+                            types::logical_value_t(resource(),
+                                                   static_cast<int64_t>(next_row_id + r)));
+                        side_chunk->set_value(1, out_idx, src_col.value(r));
+                        ++out_idx;
+                    }
+                    writes.push_back(write_entry{side.collection, std::move(side_chunk), 0, 0});
+                }
+
+                // Main chunk — one `row_id` per input row.
+                {
+                    std::pmr::vector<types::complex_logical_type> main_types(resource());
+                    types::complex_logical_type rid_main(types::logical_type::BIGINT);
+                    rid_main.set_alias("row_id");
+                    main_types.emplace_back(rid_main);
+                    auto main_chunk =
+                        std::make_unique<data_chunk_t>(resource(), main_types, row_count);
+                    main_chunk->set_cardinality(row_count);
+                    for (uint64_t r = 0; r < row_count; ++r) {
+                        main_chunk->set_value(
+                            0,
+                            r,
+                            types::logical_value_t(resource(),
+                                                   static_cast<int64_t>(next_row_id + r)));
+                    }
+                    writes.push_back(write_entry{main_full, std::move(main_chunk), 0, 0});
+                }
+
+                // Step 1: storage_append on every collection with txn_id.
+                bool failed = false;
+                size_t completed = 0;
+                for (size_t i = 0; i < writes.size(); ++i) {
+                    auto& w = writes[i];
+                    components::execution_context_t exec_ctx{ctx->session, ctx->txn, w.collection};
+                    auto data_copy =
+                        std::make_unique<data_chunk_t>(resource(), w.data->types(), w.data->size());
+                    w.data->copy(*data_copy, 0);
+                    auto [_a, af] = actor_zeta::send(disk_address_,
+                                                     &disk::manager_disk_t::storage_append,
+                                                     exec_ctx,
+                                                     std::move(data_copy));
+                    auto [start_row, count] = co_await std::move(af);
+                    w.row_start = static_cast<int64_t>(start_row);
+                    w.row_count = count;
+                    if (count == 0 && w.data->size() > 0) {
+                        failed = true;
+                        completed = i;
+                        break;
+                    }
+                    completed = i + 1;
+                }
+
+                if (failed) {
+                    for (size_t i = 0; i < completed; ++i) {
+                        auto& w = writes[i];
+                        if (w.row_count == 0) continue;
+                        components::execution_context_t rev_ctx{ctx->session, ctx->txn, w.collection};
+                        auto [_r, rf] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_revert_append,
+                                                         rev_ctx,
+                                                         w.row_start,
+                                                         w.row_count);
+                        co_await std::move(rf);
+                    }
+                    txn_manager_->abort(ctx->session);
+                    waiting_op->set_error(core::error_t(
+                        core::error_code_t::other_error,
+                        std::pmr::string{"computing INSERT: storage_append failed", resource()}));
+                    result.is_computing_table = true;
+                    break;
+                }
+
+                // Step 2: physical WAL writes per collection with same txn_id.
+                if (wal_address_ != actor_zeta::address_t::empty_address()) {
+                    for (auto& w : writes) {
+                        if (w.row_count == 0) continue;
+                        auto wal_data_copy =
+                            std::make_unique<data_chunk_t>(resource(),
+                                                           w.data->types(),
+                                                           w.data->size());
+                        w.data->copy(*wal_data_copy, 0);
+                        auto [_w, wf] = actor_zeta::send(wal_address_,
+                                                         &wal::manager_wal_replicate_t::write_physical_insert,
+                                                         ctx->session,
+                                                         std::string(w.collection.database),
+                                                         std::string(w.collection.collection),
+                                                         std::move(wal_data_copy),
+                                                         static_cast<uint64_t>(w.row_start),
+                                                         w.row_count,
+                                                         ctx->txn.transaction_id);
+                        auto wal_id = co_await std::move(wf);
+                        auto [_d, df] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::flush,
+                                                         ctx->session,
+                                                         wal_id);
+                        pending_void_.push_back(std::move(df));
+                    }
+                }
+
+                // Step 3: commit txn → commit_id.
+                uint64_t commit_id = txn_manager_->commit(ctx->session);
+
+                // Step 4: storage_commit_append per collection with same commit_id.
+                if (commit_id > 0) {
+                    for (auto& w : writes) {
+                        if (w.row_count == 0) continue;
+                        components::execution_context_t cmt_ctx{ctx->session, ctx->txn, w.collection};
+                        auto [_c, cf] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_commit_append,
+                                                         cmt_ctx,
+                                                         commit_id,
+                                                         w.row_start,
+                                                         w.row_count);
+                        co_await std::move(cf);
+                    }
+                }
+
+                // Step 5: single WAL COMMIT marker for the whole multi-collection txn.
+                if (wal_address_ != actor_zeta::address_t::empty_address()) {
+                    auto [_wc, wcf] = actor_zeta::send(wal_address_,
+                                                       &wal::manager_wal_replicate_t::commit_txn,
+                                                       ctx->session,
+                                                       ctx->txn.transaction_id);
+                    co_await std::move(wcf);
+                }
+
+                // Cursor size = how many user rows we inserted (the main entry).
+                std::pmr::vector<types::complex_logical_type> res_types(resource());
+                data_chunk_t res_chunk(resource(), res_types, row_count);
+                res_chunk.set_cardinality(row_count);
+                waiting_op->set_output(make_operator_data(resource(), std::move(res_chunk)));
+                waiting_op->mark_executed();
+                result.is_computing_table = true;
                 break;
             }
 

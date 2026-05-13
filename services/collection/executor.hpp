@@ -58,6 +58,15 @@ namespace services::collection::executor {
         std::pmr::vector<int64_t> wal_row_ids{std::pmr::get_default_resource()};
         std::unique_ptr<components::vector::data_chunk_t> wal_update_data;
         collection_full_name_t wal_collection;
+
+        // Set by computing-DML operators (insert_computing / delete_computing /
+        // update_computing) after they've done the full multi-collection DML
+        // lifecycle inline in intercept_dml_io_ — storage_append/delete/update on
+        // main + every side, WAL physical writes, txn_manager_->commit,
+        // storage_commit_* per collection, and the WAL commit-marker. When set,
+        // execute_plan's post-DML loop skips its own single-collection WAL/commit
+        // path — those have already happened.
+        bool is_computing_table{false};
     };
 
     class executor_t final : public actor_zeta::basic_actor<executor_t> {

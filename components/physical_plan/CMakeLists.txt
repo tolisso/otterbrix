@@ -27,6 +27,7 @@ set(${PROJECT_NAME}_SOURCES
         operators/sort/sort.cpp
 
         operators/operator_insert.cpp
+        operators/operator_insert_computing.cpp
         operators/operator_delete.cpp
         operators/operator_update.cpp
         operators/operator_match.cpp

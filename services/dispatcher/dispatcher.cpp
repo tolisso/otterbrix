@@ -494,14 +494,13 @@ namespace services::dispatcher {
                         }
                     }
                 } else if (catalog_.table_computes(id)) {
-                    // Sparse computing-schema INSERT:
-                    //   main table physically holds only `row_id BIGINT`.
-                    //   Each user (field, type) pair lives in a side table
-                    //     `_dyn_<main>__<field>__<type_id>` with shape `(row_id, value)`.
-                    //   For a row that has no value for a given field we simply do not
-                    //   insert into that side — LEFT-merge at SELECT time yields NULL.
-                    //
-                    // NOTE: non-atomic. Main + each side INSERT is its own transaction.
+                    // Sparse computing-schema INSERT — dispatcher pre-flight only:
+                    //   - ensure side collections exist (storage + catalog DDL);
+                    //   - extend computed_schema with any new (field, type) pairs;
+                    //   - stamp the parallel side list onto node_insert_t.
+                    // The actual data writes (storage_append/WAL/commit for main +
+                    // every side under one txn_id) happen later in the executor via
+                    // operator_insert_computing + intercept_dml_io_::insert_computing.
                     auto& children = logic_plan->children();
                     if (!children.empty() && children.front()->type() == node_type::data_t) {
                         auto data_node = boost::static_pointer_cast<node_data_t>(children.front());
@@ -511,9 +510,8 @@ namespace services::dispatcher {
                         auto main_full = logic_plan->collection_full_name();
                         update_result_.clear();
 
-                        // Step 1: ensure side collections exist + extend computed_schema.
-                        std::pmr::vector<collection_full_name_t> side_names(resource());
-                        side_names.reserve(user_chunk.data.size());
+                        std::vector<computing_side_t> sides_meta;
+                        sides_meta.reserve(user_chunk.data.size());
                         for (auto& col : user_chunk.data) {
                             auto field_name = col.type().alias();
                             auto field_type = col.type();
@@ -524,11 +522,9 @@ namespace services::dispatcher {
                                 field_name,
                                 field_type);
                             collection_full_name_t side_full(main_full.database, side_name_str);
-                            side_names.push_back(side_full);
+                            sides_meta.push_back(computing_side_t{side_full, field_type});
 
                             if (collections_.count(side_full) == 0) {
-                                // Side `value` column carries `alias = field_name` so that
-                                // subsequent SELECT-side scan can reference it directly.
                                 std::vector<components::table::column_definition_t> side_cols;
                                 complex_logical_type rid_def(logical_type::BIGINT);
                                 rid_def.set_alias("row_id");
@@ -591,77 +587,10 @@ namespace services::dispatcher {
                                 row_count;
                         }
 
-                        // Step 2: allocate contiguous row_ids from main's current row count.
-                        uint64_t next_row_id = 0;
-                        {
-                            auto [_tr, trf] = actor_zeta::send(disk_address_,
-                                                               &disk::manager_disk_t::storage_total_rows,
-                                                               session,
-                                                               main_full);
-                            next_row_id = co_await std::move(trf);
-                        }
-
-                        // Step 3: per side, build (row_id, value) chunk over non-null rows
-                        //         and execute its own INSERT.
-                        for (size_t col_idx = 0; col_idx < user_chunk.data.size(); ++col_idx) {
-                            auto& src_col = user_chunk.data[col_idx];
-                            auto field_type = src_col.type();
-                            const auto& side_full = side_names[col_idx];
-
-                            uint64_t non_null = 0;
-                            for (uint64_t r = 0; r < row_count; ++r) {
-                                if (!src_col.is_null(r)) ++non_null;
-                            }
-                            if (non_null == 0) continue;
-
-                            std::pmr::vector<complex_logical_type> side_types(resource());
-                            complex_logical_type rid_t(logical_type::BIGINT);
-                            rid_t.set_alias("row_id");
-                            side_types.emplace_back(rid_t);
-                            complex_logical_type val_t = field_type;
-                            val_t.set_alias("value");
-                            side_types.emplace_back(val_t);
-
-                            components::vector::data_chunk_t side_chunk(resource(), side_types, non_null);
-                            side_chunk.set_cardinality(non_null);
-                            uint64_t out_idx = 0;
-                            for (uint64_t r = 0; r < row_count; ++r) {
-                                if (src_col.is_null(r)) continue;
-                                side_chunk.set_value(0,
-                                                     out_idx,
-                                                     logical_value_t(resource(),
-                                                                     static_cast<int64_t>(next_row_id + r)));
-                                side_chunk.set_value(1, out_idx, src_col.value(r));
-                                ++out_idx;
-                            }
-
-                            auto side_plan = make_node_insert(resource(), side_full, std::move(side_chunk));
-                            components::table::transaction_data sub_txn{0, 0};
-                            components::logical_plan::storage_parameters sub_params(resource());
-                            auto sub_fut = execute_plan_impl(session, side_plan, std::move(sub_params), sub_txn);
-                            auto sub_res = co_await std::move(sub_fut);
-                            if (!sub_res.cursor || sub_res.cursor->is_error()) {
-                                trace(log_,
-                                      "computing INSERT: side {}.{} failed",
-                                      side_full.database,
-                                      side_full.collection);
-                            }
-                        }
-
-                        // Step 4: replace data_node with a main chunk of just row_ids.
-                        std::pmr::vector<complex_logical_type> main_types(resource());
-                        complex_logical_type rid_main(logical_type::BIGINT);
-                        rid_main.set_alias("row_id");
-                        main_types.emplace_back(rid_main);
-                        components::vector::data_chunk_t main_chunk(resource(), main_types, row_count);
-                        main_chunk.set_cardinality(row_count);
-                        for (uint64_t r = 0; r < row_count; ++r) {
-                            main_chunk.set_value(0,
-                                                 r,
-                                                 logical_value_t(resource(),
-                                                                 static_cast<int64_t>(next_row_id + r)));
-                        }
-                        data_node->data_chunk() = std::move(main_chunk);
+                        // Stamp side metadata on node_insert_t so the executor's
+                        // create_plan_insert emits operator_insert_computing.
+                        auto* ins_node = static_cast<node_insert_t*>(logic_plan.get());
+                        ins_node->set_computing_sides(std::move(sides_meta));
                     }
                 }
                 exec_result = co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
