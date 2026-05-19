@@ -10,9 +10,11 @@
 #include <components/logical_plan/node_drop_index.hpp>
 #include <components/logical_plan/param_storage.hpp>
 #include <components/physical_plan/operators/operator_delete.hpp>
+#include <components/physical_plan/operators/operator_delete_computing.hpp>
 #include <components/physical_plan/operators/operator_insert.hpp>
 #include <components/physical_plan/operators/operator_insert_computing.hpp>
 #include <components/physical_plan/operators/operator_update.hpp>
+#include <components/physical_plan/operators/operator_update_computing.hpp>
 #include <components/physical_plan_generator/create_plan.hpp>
 #include <core/executor.hpp>
 
@@ -559,6 +561,7 @@ namespace services::collection::executor {
         using components::vector::data_chunk_t;
         using components::vector::vector_t;
         namespace types = components::types;
+        namespace table = components::table;
 
         sub_plan_result_t result;
         result.wal_row_ids = std::pmr::vector<int64_t>(resource());
@@ -755,6 +758,139 @@ namespace services::collection::executor {
                 break;
             }
 
+            case operator_type::remove_computing: {
+                // Sparse computing-schema DELETE.
+                //   * Resolve pipeline (left child = scan_computing_table [+ match])
+                //     already produced chunk.row_ids = the LOGICAL row_ids of rows
+                //     that match the user WHERE.
+                //   * For each target (main + every side) we scan once to find
+                //     PHYSICAL row positions whose `row_id`-column value is in our
+                //     set, then storage_delete_rows on those positions.
+                //   * Same txn_id covers all of them; one commit + one WAL marker.
+                auto* del_c = static_cast<operator_delete_computing*>(waiting_op.get());
+                auto& src_chunk = waiting_op->output()->data_chunk();
+
+                std::unordered_set<int64_t> wanted;
+                wanted.reserve(src_chunk.size() * 2 + 1);
+                for (uint64_t r = 0; r < src_chunk.size(); ++r) {
+                    wanted.insert(src_chunk.row_ids.data<int64_t>()[r]);
+                }
+
+                struct delete_target_t {
+                    collection_full_name_t coll;
+                    std::pmr::vector<int64_t> phys_ids;
+                };
+                std::vector<delete_target_t> targets;
+                targets.reserve(1 + del_c->sides().size());
+                targets.push_back({del_c->main_collection(), std::pmr::vector<int64_t>(resource())});
+                for (const auto& s : del_c->sides()) {
+                    targets.push_back({s.collection, std::pmr::vector<int64_t>(resource())});
+                }
+
+                if (!wanted.empty()) {
+                    // Resolve physical positions per target.
+                    for (auto& t : targets) {
+                        auto [_s, sf] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_scan_batched,
+                                                         ctx->session,
+                                                         t.coll,
+                                                         std::unique_ptr<table::table_filter_t>(nullptr),
+                                                         int64_t{-1},
+                                                         std::vector<size_t>{},
+                                                         ctx->txn);
+                        auto chunks = co_await std::move(sf);
+                        for (auto& ch : chunks) {
+                            if (ch.column_count() == 0 || ch.size() == 0) continue;
+                            const auto& rid_col = ch.data[0]; // row_id is column 0 of both main and sides
+                            for (uint64_t r = 0; r < ch.size(); ++r) {
+                                if (!rid_col.validity().row_is_valid(r)) continue;
+                                int64_t rid_val = rid_col.value(r).value<int64_t>();
+                                if (wanted.count(rid_val)) {
+                                    t.phys_ids.push_back(ch.row_ids.data<int64_t>()[r]);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Step 1: storage_delete_rows × non-empty target with txn_id.
+                for (auto& t : targets) {
+                    if (t.phys_ids.empty()) continue;
+                    vector_t row_ids_vec(resource(),
+                                         types::complex_logical_type{types::logical_type::BIGINT},
+                                         t.phys_ids.size());
+                    for (size_t i = 0; i < t.phys_ids.size(); ++i) {
+                        row_ids_vec.data<int64_t>()[i] = t.phys_ids[i];
+                    }
+                    components::execution_context_t exec_ctx{ctx->session, ctx->txn, t.coll};
+                    auto [_d, df] = actor_zeta::send(disk_address_,
+                                                     &disk::manager_disk_t::storage_delete_rows,
+                                                     exec_ctx,
+                                                     std::move(row_ids_vec),
+                                                     static_cast<uint64_t>(t.phys_ids.size()));
+                    co_await std::move(df);
+                }
+
+                // Step 2: WAL physical_delete × non-empty target.
+                if (wal_address_ != actor_zeta::address_t::empty_address()) {
+                    for (auto& t : targets) {
+                        if (t.phys_ids.empty()) continue;
+                        std::pmr::vector<int64_t> wal_ids(resource());
+                        wal_ids.reserve(t.phys_ids.size());
+                        for (auto v : t.phys_ids) wal_ids.push_back(v);
+                        auto [_w, wf] = actor_zeta::send(wal_address_,
+                                                         &wal::manager_wal_replicate_t::write_physical_delete,
+                                                         ctx->session,
+                                                         std::string(t.coll.database),
+                                                         std::string(t.coll.collection),
+                                                         std::move(wal_ids),
+                                                         static_cast<uint64_t>(t.phys_ids.size()),
+                                                         ctx->txn.transaction_id);
+                        auto wal_id = co_await std::move(wf);
+                        auto [_d, df] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::flush,
+                                                         ctx->session,
+                                                         wal_id);
+                        pending_void_.push_back(std::move(df));
+                    }
+                }
+
+                // Step 3: commit → commit_id.
+                uint64_t commit_id = txn_manager_->commit(ctx->session);
+
+                // Step 4: storage_commit_delete × non-empty target.
+                if (commit_id > 0) {
+                    for (auto& t : targets) {
+                        if (t.phys_ids.empty()) continue;
+                        components::execution_context_t cmt_ctx{ctx->session, ctx->txn, t.coll};
+                        auto [_c, cf] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_commit_delete,
+                                                         cmt_ctx,
+                                                         commit_id);
+                        co_await std::move(cf);
+                    }
+                }
+
+                // Step 5: single WAL COMMIT marker.
+                if (wal_address_ != actor_zeta::address_t::empty_address()) {
+                    auto [_wc, wcf] = actor_zeta::send(wal_address_,
+                                                       &wal::manager_wal_replicate_t::commit_txn,
+                                                       ctx->session,
+                                                       ctx->txn.transaction_id);
+                    co_await std::move(wcf);
+                }
+
+                // Cursor size = how many user rows we deleted (main).
+                const uint64_t deleted = targets.front().phys_ids.size();
+                std::pmr::vector<types::complex_logical_type> res_types(resource());
+                data_chunk_t res_chunk(resource(), res_types, deleted);
+                res_chunk.set_cardinality(deleted);
+                waiting_op->set_output(make_operator_data(resource(), std::move(res_chunk)));
+                waiting_op->mark_executed();
+                result.is_computing_table = true;
+                break;
+            }
+
             case operator_type::insert_computing: {
                 // Sparse computing-schema INSERT — drives the full multi-collection
                 // DML lifecycle (storage_append + WAL physical + txn commit +
@@ -942,6 +1078,277 @@ namespace services::collection::executor {
                 }
 
                 // Cursor size = how many user rows we inserted (the main entry).
+                std::pmr::vector<types::complex_logical_type> res_types(resource());
+                data_chunk_t res_chunk(resource(), res_types, row_count);
+                res_chunk.set_cardinality(row_count);
+                waiting_op->set_output(make_operator_data(resource(), std::move(res_chunk)));
+                waiting_op->mark_executed();
+                result.is_computing_table = true;
+                break;
+            }
+
+            case operator_type::update_computing: {
+                // Sparse computing-schema UPDATE = re-alloc with full copying.
+                //   * Resolve pipeline (left child) gives us the full virtual schema
+                //     chunk for matching rows + their OLD logical row_ids in
+                //     chunk.row_ids.
+                //   * Apply SET in-place — unchanged fields stay as-is.
+                //   * INSERT-split the mutated chunk under a NEW logical row_id
+                //     range (storage_append × N+1).
+                //   * Find PHYSICAL positions for the OLD row_ids in each target
+                //     and storage_delete_rows × N+1.
+                //   * All under one txn_id + one WAL COMMIT marker.
+                auto* upd_c = static_cast<operator_update_computing*>(waiting_op.get());
+                auto& src_chunk = waiting_op->output()->data_chunk();
+                const uint64_t row_count = src_chunk.size();
+                const auto& main_full = upd_c->main_collection();
+                const auto& sides = upd_c->sides();
+
+                if (row_count == 0) {
+                    std::pmr::vector<types::complex_logical_type> empty_types(resource());
+                    data_chunk_t empty(resource(), empty_types, 0);
+                    empty.set_cardinality(0);
+                    waiting_op->set_output(make_operator_data(resource(), std::move(empty)));
+                    waiting_op->mark_executed();
+                    result.is_computing_table = true;
+                    // commit the empty txn so the post-loop doesn't try to.
+                    (void)txn_manager_->commit(ctx->session);
+                    break;
+                }
+
+                // Step 1: collect OLD logical row_ids and apply SET in-place.
+                std::unordered_set<int64_t> old_rids;
+                old_rids.reserve(row_count * 2 + 1);
+                for (uint64_t r = 0; r < row_count; ++r) {
+                    old_rids.insert(src_chunk.row_ids.data<int64_t>()[r]);
+                }
+                for (const auto& upd_expr : upd_c->updates()) {
+                    for (uint64_t r = 0; r < row_count; ++r) {
+                        upd_expr->execute(src_chunk, src_chunk, r, r, &ctx->parameters);
+                    }
+                }
+
+                // Step 2: allocate a fresh logical row_id range from main's row count.
+                uint64_t next_row_id = 0;
+                {
+                    auto [_tr, trf] = actor_zeta::send(disk_address_,
+                                                       &disk::manager_disk_t::storage_total_rows,
+                                                       ctx->session,
+                                                       main_full);
+                    next_row_id = co_await std::move(trf);
+                }
+
+                // Step 3: build per-(field, type) side chunks + main chunk.
+                struct insert_entry {
+                    collection_full_name_t collection;
+                    std::unique_ptr<data_chunk_t> data;
+                    int64_t row_start{0};
+                    uint64_t row_count{0};
+                };
+                std::vector<insert_entry> ins_writes;
+                ins_writes.reserve(src_chunk.data.size() + 1);
+
+                for (size_t col_idx = 0; col_idx < src_chunk.data.size() && col_idx < sides.size();
+                     ++col_idx) {
+                    auto& src_col = src_chunk.data[col_idx];
+                    const auto& side = sides[col_idx];
+
+                    uint64_t non_null = 0;
+                    for (uint64_t r = 0; r < row_count; ++r) {
+                        if (!src_col.is_null(r)) ++non_null;
+                    }
+                    if (non_null == 0) continue;
+
+                    std::pmr::vector<types::complex_logical_type> side_types(resource());
+                    types::complex_logical_type rid_t(types::logical_type::BIGINT);
+                    rid_t.set_alias("row_id");
+                    side_types.emplace_back(rid_t);
+                    types::complex_logical_type val_t = side.field_type;
+                    val_t.set_alias("value");
+                    side_types.emplace_back(val_t);
+
+                    auto side_chunk = std::make_unique<data_chunk_t>(resource(), side_types, non_null);
+                    side_chunk->set_cardinality(non_null);
+                    uint64_t out_idx = 0;
+                    for (uint64_t r = 0; r < row_count; ++r) {
+                        if (src_col.is_null(r)) continue;
+                        side_chunk->set_value(
+                            0,
+                            out_idx,
+                            types::logical_value_t(resource(),
+                                                   static_cast<int64_t>(next_row_id + r)));
+                        side_chunk->set_value(1, out_idx, src_col.value(r));
+                        ++out_idx;
+                    }
+                    ins_writes.push_back({side.collection, std::move(side_chunk), 0, 0});
+                }
+
+                {
+                    std::pmr::vector<types::complex_logical_type> main_types(resource());
+                    types::complex_logical_type rid_main(types::logical_type::BIGINT);
+                    rid_main.set_alias("row_id");
+                    main_types.emplace_back(rid_main);
+                    auto main_chunk = std::make_unique<data_chunk_t>(resource(), main_types, row_count);
+                    main_chunk->set_cardinality(row_count);
+                    for (uint64_t r = 0; r < row_count; ++r) {
+                        main_chunk->set_value(
+                            0,
+                            r,
+                            types::logical_value_t(resource(),
+                                                   static_cast<int64_t>(next_row_id + r)));
+                    }
+                    ins_writes.push_back({main_full, std::move(main_chunk), 0, 0});
+                }
+
+                // Step 4: storage_append every entry with txn_id.
+                for (auto& w : ins_writes) {
+                    components::execution_context_t exec_ctx{ctx->session, ctx->txn, w.collection};
+                    auto data_copy = std::make_unique<data_chunk_t>(resource(),
+                                                                    w.data->types(),
+                                                                    w.data->size());
+                    w.data->copy(*data_copy, 0);
+                    auto [_a, af] = actor_zeta::send(disk_address_,
+                                                     &disk::manager_disk_t::storage_append,
+                                                     exec_ctx,
+                                                     std::move(data_copy));
+                    auto [start_row, count] = co_await std::move(af);
+                    w.row_start = static_cast<int64_t>(start_row);
+                    w.row_count = count;
+                }
+
+                // Step 5: resolve OLD phys positions per target and storage_delete_rows.
+                struct delete_entry {
+                    collection_full_name_t coll;
+                    std::pmr::vector<int64_t> phys_ids;
+                };
+                std::vector<delete_entry> del_writes;
+                del_writes.reserve(1 + sides.size());
+                del_writes.push_back({main_full, std::pmr::vector<int64_t>(resource())});
+                for (const auto& s : sides) {
+                    del_writes.push_back({s.collection, std::pmr::vector<int64_t>(resource())});
+                }
+                for (auto& d : del_writes) {
+                    auto [_s, sf] = actor_zeta::send(disk_address_,
+                                                     &disk::manager_disk_t::storage_scan_batched,
+                                                     ctx->session,
+                                                     d.coll,
+                                                     std::unique_ptr<table::table_filter_t>(nullptr),
+                                                     int64_t{-1},
+                                                     std::vector<size_t>{},
+                                                     ctx->txn);
+                    auto chunks = co_await std::move(sf);
+                    for (auto& ch : chunks) {
+                        if (ch.column_count() == 0 || ch.size() == 0) continue;
+                        const auto& rid_col = ch.data[0];
+                        for (uint64_t r = 0; r < ch.size(); ++r) {
+                            if (!rid_col.validity().row_is_valid(r)) continue;
+                            int64_t rid_val = rid_col.value(r).value<int64_t>();
+                            if (old_rids.count(rid_val)) {
+                                d.phys_ids.push_back(ch.row_ids.data<int64_t>()[r]);
+                            }
+                        }
+                    }
+                }
+                for (auto& d : del_writes) {
+                    if (d.phys_ids.empty()) continue;
+                    vector_t row_ids_vec(resource(),
+                                         types::complex_logical_type{types::logical_type::BIGINT},
+                                         d.phys_ids.size());
+                    for (size_t i = 0; i < d.phys_ids.size(); ++i) {
+                        row_ids_vec.data<int64_t>()[i] = d.phys_ids[i];
+                    }
+                    components::execution_context_t exec_ctx{ctx->session, ctx->txn, d.coll};
+                    auto [_d, df] = actor_zeta::send(disk_address_,
+                                                     &disk::manager_disk_t::storage_delete_rows,
+                                                     exec_ctx,
+                                                     std::move(row_ids_vec),
+                                                     static_cast<uint64_t>(d.phys_ids.size()));
+                    co_await std::move(df);
+                }
+
+                // Step 6: WAL physical writes (inserts + deletes) with txn_id.
+                if (wal_address_ != actor_zeta::address_t::empty_address()) {
+                    for (auto& w : ins_writes) {
+                        if (w.row_count == 0) continue;
+                        auto wal_data_copy = std::make_unique<data_chunk_t>(resource(),
+                                                                            w.data->types(),
+                                                                            w.data->size());
+                        w.data->copy(*wal_data_copy, 0);
+                        auto [_w, wf] = actor_zeta::send(wal_address_,
+                                                         &wal::manager_wal_replicate_t::write_physical_insert,
+                                                         ctx->session,
+                                                         std::string(w.collection.database),
+                                                         std::string(w.collection.collection),
+                                                         std::move(wal_data_copy),
+                                                         static_cast<uint64_t>(w.row_start),
+                                                         w.row_count,
+                                                         ctx->txn.transaction_id);
+                        auto wal_id = co_await std::move(wf);
+                        auto [_d, df] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::flush,
+                                                         ctx->session,
+                                                         wal_id);
+                        pending_void_.push_back(std::move(df));
+                    }
+                    for (auto& d : del_writes) {
+                        if (d.phys_ids.empty()) continue;
+                        std::pmr::vector<int64_t> wal_ids(resource());
+                        wal_ids.reserve(d.phys_ids.size());
+                        for (auto v : d.phys_ids) wal_ids.push_back(v);
+                        auto [_w, wf] = actor_zeta::send(wal_address_,
+                                                         &wal::manager_wal_replicate_t::write_physical_delete,
+                                                         ctx->session,
+                                                         std::string(d.coll.database),
+                                                         std::string(d.coll.collection),
+                                                         std::move(wal_ids),
+                                                         static_cast<uint64_t>(d.phys_ids.size()),
+                                                         ctx->txn.transaction_id);
+                        auto wal_id = co_await std::move(wf);
+                        auto [_d, df] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::flush,
+                                                         ctx->session,
+                                                         wal_id);
+                        pending_void_.push_back(std::move(df));
+                    }
+                }
+
+                // Step 7: commit txn → commit_id.
+                uint64_t commit_id = txn_manager_->commit(ctx->session);
+
+                // Step 8: storage_commit per target with same commit_id.
+                if (commit_id > 0) {
+                    for (auto& w : ins_writes) {
+                        if (w.row_count == 0) continue;
+                        components::execution_context_t cmt_ctx{ctx->session, ctx->txn, w.collection};
+                        auto [_c, cf] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_commit_append,
+                                                         cmt_ctx,
+                                                         commit_id,
+                                                         w.row_start,
+                                                         w.row_count);
+                        co_await std::move(cf);
+                    }
+                    for (auto& d : del_writes) {
+                        if (d.phys_ids.empty()) continue;
+                        components::execution_context_t cmt_ctx{ctx->session, ctx->txn, d.coll};
+                        auto [_c, cf] = actor_zeta::send(disk_address_,
+                                                         &disk::manager_disk_t::storage_commit_delete,
+                                                         cmt_ctx,
+                                                         commit_id);
+                        co_await std::move(cf);
+                    }
+                }
+
+                // Step 9: single WAL COMMIT marker.
+                if (wal_address_ != actor_zeta::address_t::empty_address()) {
+                    auto [_wc, wcf] = actor_zeta::send(wal_address_,
+                                                       &wal::manager_wal_replicate_t::commit_txn,
+                                                       ctx->session,
+                                                       ctx->txn.transaction_id);
+                    co_await std::move(wcf);
+                }
+
+                // Cursor size = how many user rows were updated.
                 std::pmr::vector<types::complex_logical_type> res_types(resource());
                 data_chunk_t res_chunk(resource(), res_types, row_count);
                 res_chunk.set_cardinality(row_count);

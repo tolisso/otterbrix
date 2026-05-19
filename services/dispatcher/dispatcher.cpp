@@ -599,402 +599,64 @@ namespace services::dispatcher {
             case node_type::delete_t: {
                 if (catalog_.table_computes(id) &&
                     catalog_.get_computing_table_schema(id).is_sparse()) {
-                    // Sparse computing-schema DELETE:
-                    //   1) Run resolve-SELECT (aggregate(main) + match) — scan_computing_table
-                    //      writes logical row_id values into chunk.row_ids; match propagates them.
-                    //   2) For each matching row_id, dispatch a regular per-table DELETE
-                    //      WHERE row_id = N on main and on every side table. Main first
-                    //      (row disappears from scan_computing_table immediately), then sides.
-                    auto main_full = logic_plan->collection_full_name();
-
-                    // Find user's WHERE node_match in the original DELETE plan.
-                    components::expressions::expression_ptr user_where;
-                    for (auto& ch : logic_plan->children()) {
-                        if (ch->type() == node_type::match_t && !ch->expressions().empty()) {
-                            user_where = ch->expressions()[0];
-                            break;
-                        }
-                    }
-
-                    // Build SELECT plan: aggregate(main) + match(WHERE).
-                    auto sel_agg = make_node_aggregate(resource(), main_full);
-                    if (user_where) {
-                        auto match_copy = make_node_match(resource(), main_full, user_where);
-                        sel_agg->append_child(match_copy);
-                    }
-
-                    // Run the same pre-execute pipeline as a regular SELECT: annotate +
-                    // validate + post_validate_optimize.
-                    node_ptr sel_plan = sel_agg;
-                    components::planner::annotate_computing_aggregates(resource(), sel_plan, catalog_);
-                    auto vt = validate_types(resource(), catalog_, sel_plan.get());
-                    if (vt.contains_error()) {
-                        error = std::move(vt);
-                        break;
-                    }
-                    auto vs = validate_schema(resource(), catalog_, sel_plan.get(), params->parameters());
-                    if (vs.has_error()) {
-                        error = vs.error();
-                        break;
-                    }
-                    sel_plan = components::planner::post_validate_optimize(resource(), sel_plan, &catalog_);
-
-                    // Execute resolve-SELECT — cursor's chunk.row_ids carries logical row_ids.
-                    std::vector<int64_t> matching_row_ids;
-                    {
-                        auto sel_fut =
-                            execute_plan_impl(session, sel_plan, params->parameters(), txn_data);
-                        auto sel_res = co_await std::move(sel_fut);
-                        if (sel_res.cursor && !sel_res.cursor->is_error()) {
-                            const auto& ch = sel_res.cursor->chunk_data();
-                            matching_row_ids.reserve(ch.size());
-                            for (uint64_t r = 0; r < ch.size(); ++r) {
-                                matching_row_ids.push_back(ch.row_ids.data<int64_t>()[r]);
-                            }
-                        }
-                    }
-
-                    // Build list of physical tables to delete from: main + every side.
+                    // Sparse computing-schema DELETE — dispatcher pre-flight only:
+                    //   - stamp the full side list on node_delete_t.
+                    // Actual multi-collection storage_delete_rows + WAL + commit
+                    // happens later in executor via operator_delete_computing +
+                    // intercept_dml_io_::remove_computing.
                     const auto& cs = catalog_.get_computing_table_schema(id);
                     auto sch = cs.latest_types_struct();
-                    std::vector<collection_full_name_t> targets;
-                    targets.reserve(1 + sch.child_types().size());
-                    targets.push_back(main_full);
+                    auto main_full = logic_plan->collection_full_name();
+                    std::vector<computing_side_t> sides_meta;
+                    sides_meta.reserve(sch.child_types().size());
                     for (const auto& f : sch.child_types()) {
                         std::string side_name = computed_schema::side_table_name(
                             std::string_view(main_full.collection.data(),
                                              main_full.collection.size()),
                             f.alias(),
                             f);
-                        targets.emplace_back(main_full.database, side_name);
+                        sides_meta.push_back(computing_side_t{
+                            collection_full_name_t{main_full.database, side_name},
+                            f});
                     }
-
-                    // Per-row, per-table DELETE WHERE row_id = N. The compare expression's
-                    // key.path()=[0] is set manually (row_id is column 0 in both main and
-                    // sides physically) so the executor's create_plan_delete can build
-                    // full_scan(coll, expr) without going through validate_schema for the
-                    // sub-plan. Main first so the row vanishes from scan_computing_table
-                    // before sides are cleaned up.
-                    uint64_t total_deleted = 0;
-                    for (int64_t row_id : matching_row_ids) {
-                        for (size_t tidx = 0; tidx < targets.size(); ++tidx) {
-                            const auto& target = targets[tidx];
-
-                            components::expressions::key_t key(resource(), "row_id");
-                            std::pmr::vector<size_t> path(resource());
-                            path.push_back(0);
-                            key.set_path(std::move(path));
-
-                            components::logical_plan::storage_parameters sub_params(resource());
-                            const core::parameter_id_t pid{1};
-                            add_parameter(sub_params, pid, logical_value_t(resource(), row_id));
-
-                            auto cmp = components::expressions::make_compare_expression(
-                                resource(),
-                                components::expressions::compare_type::eq,
-                                components::expressions::param_storage{key},
-                                components::expressions::param_storage{pid});
-
-                            auto match_node = make_node_match(resource(), target, cmp);
-                            auto del_plan = make_node_delete_many(resource(), target, match_node);
-                            components::table::transaction_data sub_txn{0, 0};
-                            auto sub_fut =
-                                execute_plan_impl(session, del_plan, std::move(sub_params), sub_txn);
-                            auto sub_res = co_await std::move(sub_fut);
-                            if (sub_res.cursor && !sub_res.cursor->is_error() && tidx == 0) {
-                                // Count once per logical row (when main DELETE succeeds).
-                                ++total_deleted;
-                            }
-                        }
-                    }
-
+                    auto* del_node = static_cast<node_delete_t*>(logic_plan.get());
+                    del_node->set_computing_sides(std::move(sides_meta));
                     update_result_.clear();
-                    std::pmr::vector<components::types::complex_logical_type> result_types(resource());
-                    components::vector::data_chunk_t result_chunk(resource(), result_types, total_deleted);
-                    result_chunk.set_cardinality(total_deleted);
-                    exec_result = {make_cursor(resource(), std::move(result_chunk)), {}};
-                } else {
-                    exec_result =
-                        co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
                 }
+                exec_result =
+                    co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
                 break;
             }
             case node_type::update_t: {
                 if (catalog_.table_computes(id) &&
                     catalog_.get_computing_table_schema(id).is_sparse()) {
-                    // Sparse computing-schema UPDATE = re-alloc with full copying:
-                    //   1) SELECT all rows matching WHERE with their full virtual schema
-                    //      (column_pruning is skipped — we need every field for the new row).
-                    //      scan_computing_table propagates logical row_ids via chunk.row_ids.
-                    //   2) Apply each SET expression in-place on the result chunk.
-                    //   3) INSERT-split the (mutated) chunk → allocates a fresh row_id range,
-                    //      writes every field into its side and the new row_ids into main.
-                    //   4) Per old row_id × every table (main + every side), issue regular
-                    //      DELETE WHERE row_id = N. Main first so the old row vanishes from
-                    //      scan_computing_table before its sides are wiped.
-                    auto* upd_node = reinterpret_cast<node_update_t*>(logic_plan.get());
+                    // Sparse computing-schema UPDATE — dispatcher pre-flight only:
+                    //   - stamp the full side list on node_update_t.
+                    // The re-alloc-and-copy lifecycle (read all matching rows, apply
+                    // SET, allocate new row_id range, storage_append × N+1,
+                    // storage_delete_rows × N+1) happens later in executor via
+                    // operator_update_computing + intercept_dml_io_::update_computing.
+                    const auto& cs = catalog_.get_computing_table_schema(id);
+                    auto sch = cs.latest_types_struct();
                     auto main_full = logic_plan->collection_full_name();
-
-                    components::expressions::expression_ptr user_where;
-                    for (auto& ch : logic_plan->children()) {
-                        if (ch->type() == node_type::match_t && !ch->expressions().empty()) {
-                            user_where = ch->expressions()[0];
-                            break;
-                        }
-                    }
-
-                    // 1) Resolve+read: aggregate(main) + match(WHERE). We deliberately do
-                    // NOT call post_validate_optimize here — column_pruning would drop the
-                    // user fields we need for re-INSERT.
-                    auto sel_agg = make_node_aggregate(resource(), main_full);
-                    if (user_where) {
-                        auto match_copy = make_node_match(resource(), main_full, user_where);
-                        sel_agg->append_child(match_copy);
-                    }
-                    node_ptr sel_plan = sel_agg;
-                    components::planner::annotate_computing_aggregates(resource(), sel_plan, catalog_);
-                    auto vt = validate_types(resource(), catalog_, sel_plan.get());
-                    if (vt.contains_error()) {
-                        error = std::move(vt);
-                        break;
-                    }
-                    auto vs = validate_schema(resource(), catalog_, sel_plan.get(), params->parameters());
-                    if (vs.has_error()) {
-                        error = vs.error();
-                        break;
-                    }
-
-                    auto sel_fut = execute_plan_impl(session, sel_plan, params->parameters(), txn_data);
-                    auto sel_res = co_await std::move(sel_fut);
-                    if (!sel_res.cursor || sel_res.cursor->is_error()) {
-                        exec_result = {std::move(sel_res.cursor), {}};
-                        break;
-                    }
-
-                    auto& chunk_ref = sel_res.cursor->chunk_data();
-                    const uint64_t row_count = chunk_ref.size();
-                    update_result_.clear();
-                    if (row_count == 0) {
-                        std::pmr::vector<components::types::complex_logical_type> result_types(resource());
-                        components::vector::data_chunk_t result_chunk(resource(), result_types, 0);
-                        result_chunk.set_cardinality(0);
-                        exec_result = {make_cursor(resource(), std::move(result_chunk)), {}};
-                        break;
-                    }
-
-                    // Collect old row_ids before mutating chunk.
-                    std::vector<int64_t> old_row_ids;
-                    old_row_ids.reserve(row_count);
-                    for (uint64_t r = 0; r < row_count; ++r) {
-                        old_row_ids.push_back(chunk_ref.row_ids.data<int64_t>()[r]);
-                    }
-
-                    // 2) Apply SET in-place. Each update_expr's key.path() is already
-                    // resolved by validate_schema against the virtual schema (same column
-                    // order as chunk_ref).
-                    for (const auto& upd_expr : upd_node->updates()) {
-                        for (uint64_t r = 0; r < row_count; ++r) {
-                            upd_expr->execute(chunk_ref, chunk_ref, r, r, &params->parameters());
-                        }
-                    }
-
-                    // 3) INSERT-split for the mutated chunk. Same machinery as the regular
-                    // INSERT case below — we inline it because GCC's coroutine ABI forbids
-                    // out-of-line member coroutines on this actor.
-                    auto user_chunk = chunk_ref.partial_copy(resource(), 0, row_count);
-                    auto& schema = catalog_.get_computing_table_schema(id);
-                    std::pmr::vector<collection_full_name_t> ins_side_names(resource());
-                    ins_side_names.reserve(user_chunk.data.size());
-                    for (auto& col : user_chunk.data) {
-                        auto field_name = col.type().alias();
-                        auto field_type = col.type();
-                        std::pmr::string pmr_field(field_name.c_str(), resource());
-
-                        std::string side_name_str = computed_schema::side_table_name(
-                            std::string_view(main_full.collection.data(), main_full.collection.size()),
-                            field_name,
-                            field_type);
-                        collection_full_name_t side_full(main_full.database, side_name_str);
-                        ins_side_names.push_back(side_full);
-
-                        if (collections_.count(side_full) == 0) {
-                            // New (field, type) introduced by SET — create side on the fly.
-                            std::vector<components::table::column_definition_t> side_cols;
-                            complex_logical_type rid_def(logical_type::BIGINT);
-                            rid_def.set_alias("row_id");
-                            side_cols.emplace_back("row_id", rid_def, /*not_null=*/true, std::nullopt);
-                            complex_logical_type val_def = field_type;
-                            val_def.set_alias(std::string(field_name));
-                            side_cols.emplace_back("value", val_def, /*not_null=*/true, std::nullopt);
-
-                            {
-                                auto [_ac, acf] = actor_zeta::send(disk_address_,
-                                                                   &disk::manager_disk_t::append_collection,
-                                                                   session,
-                                                                   side_full.database,
-                                                                   side_full.collection);
-                                co_await std::move(acf);
-                            }
-                            {
-                                auto [_cs2, csf2] = actor_zeta::send(
-                                    disk_address_,
-                                    &disk::manager_disk_t::create_storage_with_columns,
-                                    session,
-                                    side_full,
-                                    side_cols);
-                                co_await std::move(csf2);
-                            }
-                            if (index_address_ != actor_zeta::address_t::empty_address()) {
-                                auto [_ri, rif] = actor_zeta::send(index_address_,
-                                                                   &index::manager_index_t::register_collection,
-                                                                   session,
-                                                                   side_full);
-                                co_await std::move(rif);
-                            }
-                            {
-                                auto [_fc, fcf] = actor_zeta::send(disk_address_,
-                                                                   &disk::manager_disk_t::flush,
-                                                                   session,
-                                                                   wal::id_t{0});
-                                co_await std::move(fcf);
-                            }
-                            {
-                                std::vector<components::table::column_definition_t> sch_cols = side_cols;
-                                std::vector<field_description> descs;
-                                descs.reserve(sch_cols.size());
-                                for (size_t i = 0; i < sch_cols.size(); ++i) {
-                                    descs.emplace_back(static_cast<field_id_t>(i));
-                                }
-                                table_id sid(resource(), side_full);
-                                auto sch = components::catalog::schema(
-                                    resource(), std::move(sch_cols), std::move(descs));
-                                auto err_create = catalog_.create_table(
-                                    sid, table_metadata(resource(), std::move(sch)));
-                                (void)err_create;
-                            }
-                            collections_.insert(side_full);
-                        }
-                        schema.append(pmr_field, field_type);
-                        col.set_type_alias(std::string(field_name));
-                    }
-
-                    uint64_t next_row_id = 0;
-                    {
-                        auto [_tr, trf] = actor_zeta::send(disk_address_,
-                                                           &disk::manager_disk_t::storage_total_rows,
-                                                           session,
-                                                           main_full);
-                        next_row_id = co_await std::move(trf);
-                    }
-
-                    for (size_t col_idx = 0; col_idx < user_chunk.data.size(); ++col_idx) {
-                        auto& src_col = user_chunk.data[col_idx];
-                        auto field_type = src_col.type();
-                        const auto& side_full = ins_side_names[col_idx];
-
-                        uint64_t non_null = 0;
-                        for (uint64_t r = 0; r < row_count; ++r) {
-                            if (!src_col.is_null(r)) ++non_null;
-                        }
-                        if (non_null == 0) continue;
-
-                        std::pmr::vector<complex_logical_type> side_types(resource());
-                        complex_logical_type rid_t(logical_type::BIGINT);
-                        rid_t.set_alias("row_id");
-                        side_types.emplace_back(rid_t);
-                        complex_logical_type val_t = field_type;
-                        val_t.set_alias("value");
-                        side_types.emplace_back(val_t);
-
-                        components::vector::data_chunk_t side_chunk(resource(), side_types, non_null);
-                        side_chunk.set_cardinality(non_null);
-                        uint64_t out_idx = 0;
-                        for (uint64_t r = 0; r < row_count; ++r) {
-                            if (src_col.is_null(r)) continue;
-                            side_chunk.set_value(0,
-                                                 out_idx,
-                                                 logical_value_t(resource(),
-                                                                 static_cast<int64_t>(next_row_id + r)));
-                            side_chunk.set_value(1, out_idx, src_col.value(r));
-                            ++out_idx;
-                        }
-                        auto side_plan = make_node_insert(resource(), side_full, std::move(side_chunk));
-                        components::table::transaction_data sub_txn{0, 0};
-                        components::logical_plan::storage_parameters sub_params(resource());
-                        auto sub_fut = execute_plan_impl(session, side_plan, std::move(sub_params), sub_txn);
-                        (void)(co_await std::move(sub_fut));
-                    }
-
-                    // Main INSERT with new row_ids.
-                    {
-                        std::pmr::vector<complex_logical_type> main_types(resource());
-                        complex_logical_type rid_main(logical_type::BIGINT);
-                        rid_main.set_alias("row_id");
-                        main_types.emplace_back(rid_main);
-                        components::vector::data_chunk_t main_chunk(resource(), main_types, row_count);
-                        main_chunk.set_cardinality(row_count);
-                        for (uint64_t r = 0; r < row_count; ++r) {
-                            main_chunk.set_value(0,
-                                                 r,
-                                                 logical_value_t(resource(),
-                                                                 static_cast<int64_t>(next_row_id + r)));
-                        }
-                        auto main_plan = make_node_insert(resource(), main_full, std::move(main_chunk));
-                        components::table::transaction_data sub_txn{0, 0};
-                        components::logical_plan::storage_parameters sub_params(resource());
-                        auto main_fut = execute_plan_impl(session, main_plan, std::move(sub_params), sub_txn);
-                        (void)(co_await std::move(main_fut));
-                    }
-
-                    // 4) DELETE old row_ids from main + every side.
-                    auto sch_del = schema.latest_types_struct();
-                    std::vector<collection_full_name_t> delete_targets;
-                    delete_targets.reserve(1 + sch_del.child_types().size());
-                    delete_targets.push_back(main_full);
-                    for (const auto& f : sch_del.child_types()) {
+                    std::vector<computing_side_t> sides_meta;
+                    sides_meta.reserve(sch.child_types().size());
+                    for (const auto& f : sch.child_types()) {
                         std::string side_name = computed_schema::side_table_name(
                             std::string_view(main_full.collection.data(),
                                              main_full.collection.size()),
                             f.alias(),
                             f);
-                        delete_targets.emplace_back(main_full.database, side_name);
+                        sides_meta.push_back(computing_side_t{
+                            collection_full_name_t{main_full.database, side_name},
+                            f});
                     }
-                    for (int64_t old_rid : old_row_ids) {
-                        for (size_t tidx = 0; tidx < delete_targets.size(); ++tidx) {
-                            const auto& target = delete_targets[tidx];
-
-                            components::expressions::key_t key(resource(), "row_id");
-                            std::pmr::vector<size_t> path(resource());
-                            path.push_back(0);
-                            key.set_path(std::move(path));
-
-                            components::logical_plan::storage_parameters sub_params(resource());
-                            const core::parameter_id_t pid{1};
-                            add_parameter(sub_params, pid, logical_value_t(resource(), old_rid));
-
-                            auto cmp = components::expressions::make_compare_expression(
-                                resource(),
-                                components::expressions::compare_type::eq,
-                                components::expressions::param_storage{key},
-                                components::expressions::param_storage{pid});
-
-                            auto match_node = make_node_match(resource(), target, cmp);
-                            auto del_plan = make_node_delete_many(resource(), target, match_node);
-                            components::table::transaction_data sub_txn{0, 0};
-                            auto sub_fut =
-                                execute_plan_impl(session, del_plan, std::move(sub_params), sub_txn);
-                            (void)(co_await std::move(sub_fut));
-                        }
-                    }
-
-                    std::pmr::vector<components::types::complex_logical_type> result_types(resource());
-                    components::vector::data_chunk_t result_chunk(resource(), result_types, row_count);
-                    result_chunk.set_cardinality(row_count);
-                    exec_result = {make_cursor(resource(), std::move(result_chunk)), {}};
-                } else {
-                    exec_result =
-                        co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
+                    auto* upd_node = static_cast<node_update_t*>(logic_plan.get());
+                    upd_node->set_computing_sides(std::move(sides_meta));
+                    update_result_.clear();
                 }
+                exec_result =
+                    co_await execute_plan_impl(session, logic_plan, params->take_parameters(), txn_data);
                 break;
             }
             default:
