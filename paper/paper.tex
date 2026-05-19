@@ -1,4 +1,4 @@
-\documentclass[runningheads]{llncs}
+\documentclass[conference,a4paper,10pt]{IEEEtran}
 
 %% --- движок и шрифты ---
 \usepackage{fontspec}
@@ -7,7 +7,7 @@
 \setotherlanguage{english}
 \setmainfont{Linux Libertine O}
 \setsansfont{Linux Biolinum O}
-\setmonofont{DejaVu Sans Mono}[Scale=0.88]
+\setmonofont{DejaVu Sans Mono}[Scale=0.82]
 
 %% --- стандартные пакеты ---
 \usepackage{amsmath, amssymb}
@@ -17,6 +17,7 @@
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{caption}
+\usepackage{cite}
 
 \lstset{
   basicstyle=\ttfamily\footnotesize,
@@ -52,12 +53,10 @@
 
 \title{Минималистичная реализация эффективного хранения JSON в произвольных реляционных СУБД через декомпозицию путей в side-таблицы}
 
-\titlerunning{Хранение JSON через side-таблицы}
-
-\author{Малько Е.\,А.}
-\authorrunning{Малько Е.\,А.}
-\institute{Университет ИТМО, Санкт-Петербург, Россия\\
-\email{egormalko1@outlook.com}}
+\author{\IEEEauthorblockN{Малько Е.\,А.}
+\IEEEauthorblockA{Университет ИТМО\\
+Санкт-Петербург, Россия\\
+egormalko1@outlook.com}}
 
 \maketitle
 
@@ -88,9 +87,12 @@ compaction, дублирующее хранение полного докуме�
 точечной выборки, и битовая маска присутствия полей в main для
 сужения множества side-таблиц при удалении.
 
-\keywords{полуструктурированные данные \and JSON \and колоночные СУБД
-\and вертикальная декомпозиция \and MVCC \and ClickHouse}
 \end{abstract}
+
+\begin{IEEEkeywords}
+полуструктурированные данные, JSON, колоночные СУБД,
+вертикальная декомпозиция, MVCC, ClickHouse
+\end{IEEEkeywords}
 
 
 \section{Введение}
@@ -106,14 +108,15 @@ OLAP: чтение значений отдельных полей миллиар
 Канонические подходы к хранению JSON в СУБД можно разделить на три
 семейства.
 
-\paragraph{Хранение JSON как неделимого значения.}
+\textit{Хранение JSON как неделимого значения.}
 Документ сериализуется в бинарный формат (BSON в MongoDB, JSONB в
 PostgreSQL, OSON в Oracle) и хранится в одной ячейке. Доступ к
 отдельному полю требует разбора всего документа --- даже если из него
 нужен один скаляр. Семантика максимально гибкая, эффективность
 аналитических чтений минимальна.
 
-\paragraph{Entity-Attribute-Value (EAV) и его варианты.}
+\medskip
+\textit{Entity-Attribute-Value (EAV) и его варианты.}
 Документ раскладывается в строки общей таблицы
 \texttt{(doc\_id, key, value)}. Поля разных типов либо приводятся к
 строке, либо разносятся в несколько по-типовых таблиц (как в Argo3
@@ -122,7 +125,8 @@ PostgreSQL, OSON в Oracle) и хранится в одной ячейке. До
 оказываются физически разбросаны, а реконструкция документа требует
 дорогих JOIN-ов.
 
-\paragraph{Колонка на каждый JSON-путь (subcolumn-подход).}
+\medskip
+\textit{Колонка на каждый JSON-путь (subcolumn-подход).}
 Современные колоночные движки (ClickHouse \cite{clickhouseJson},
 BigQuery Capacitor \cite{bigqueryCapacitor}, SingleStore JSON over
 Columnstore \cite{singlestoreJson}, Apache Doris VARIANT
@@ -568,7 +572,7 @@ MVCC-транзакции. Предложенные три эвристики п
 адаптивная битовая маска присутствия с экономичным кодированием
 для широких схем документов.
 
-\bibliographystyle{splncs04}
+\bibliographystyle{IEEEtran}
 \bibliography{references}
 
 \end{document}
